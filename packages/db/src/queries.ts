@@ -255,6 +255,27 @@ const INBOUND_SPAN_SQL = `(
     or attributes ->> 'vercel.matched_path' is not null
   )`;
 
+/**
+ * SQL: derive a request's route from `http.route` if the producer set it, else parse
+ * it out of the span's `name`. Vercel/Next.js never sets `http.route` (it's always
+ * null on that producer) — instead it names inbound request spans
+ * `"<METHOD> <path>"` (e.g. `"GET /profile/[id]/page"`). `regexp_replace` strips a
+ * leading HTTP-method token + space when present; when the name doesn't start with
+ * one it's a no-op, so span names from other producers still fall through as the
+ * route unchanged. `http.route` always wins when present — keeps non-Vercel
+ * producers (which DO set it) behaving exactly as before.
+ *
+ * Only decides what STRING to read as the route — callers MUST still gate on
+ * `not OUTBOUND_SPAN_SQL` themselves (this fires on any span, and an outbound
+ * span's name is never a route).
+ */
+function routeFromSpanSql(alias: string): string {
+  return `coalesce(
+    ${alias}.attributes ->> 'http.route',
+    regexp_replace(${alias}.name, '^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) ', '')
+  )`;
+}
+
 export interface QueryLogsParams {
   project: string;
   since: Date;
@@ -403,8 +424,12 @@ export interface TopSourcesResult {
  * that never carries `http.route`, while the sibling request span in the SAME
  * trace_id carries the route/status. So for each ip we collect every trace_id it
  * touched (via a span), then pull route/status from any INBOUND span in those
- * traces — not just the row that happened to carry the ip. Logs keep the direct
- * (non-joined) reading since a log's own ip+route already sit on the same row.
+ * traces — not just the row that happened to carry the ip. Route itself comes
+ * from `routeFromSpanSql`: `http.route` when a producer sets it, else parsed off
+ * the span's `name` (Vercel never sets `http.route`, but names inbound spans
+ * `"<METHOD> <path>"`). Logs keep the direct (non-joined) reading since a log's
+ * own ip+route already sit on the same row (logs have no span `name` to fall
+ * back on, so they still require `http.route`).
  *
  * Error rule: for spans, same as `errorSummary()` (OTLP error status or HTTP >= 400,
  * excluding outbound spans — see `OUTBOUND_SPAN_SQL`) read from the promoted
@@ -463,15 +488,20 @@ export async function topSources(
     -- is what recovers the route when it lives on a sibling span, not the one
     -- that carried the ip. "spans" is unaliased so OUTBOUND_SPAN_SQL/INBOUND_SPAN_SQL's
     -- bare kind/attributes references stay unambiguous (ip_traces has neither).
+    -- Route comes from routeFromSpanSql: http.route if the producer set it, else
+    -- parsed off the span name (Vercel's shape — see that function's doc comment).
+    -- not OUTBOUND_SPAN_SQL keeps this service's own fetch spans (whose names can
+    -- also start with a method, e.g. "fetch GET https://...supabase.co/...") out —
+    -- inbound-ness is decided by kind/route-attrs, never by the name string alone.
     , span_routes as (
       select ip_traces.ip,
-        spans.attributes ->> 'http.route' as route,
+        ${routeFromSpanSql("spans")} as route,
         (spans.status_code = 'error' or spans.http_status_code >= 400) as is_error
       from ip_traces
       join spans on spans.project = $1 and spans.trace_id = ip_traces.trace_id
       where spans.start_ts >= $2
+        and not ${OUTBOUND_SPAN_SQL}
         and ${INBOUND_SPAN_SQL}
-        and spans.attributes ->> 'http.route' is not null
     )
     -- Log-side: ip + route already sit on the same log row (e.g. a 429/401 log)
     -- so no trace hop is needed here.
@@ -601,6 +631,9 @@ export interface ListTracesResult {
  * trace_id (deduped), newest first. The representative row is the earliest
  * inbound request span in that trace (server-kind, or carrying route-ish
  * attributes — see `INBOUND_SPAN_SQL`/`isInboundSpan`) for its name/route/status.
+ * `route` is `routeFromSpanSql`'s `http.route`-or-parsed-name (see `topSources`'
+ * doc comment) so it's populated even for producers like Vercel that never set
+ * `http.route`.
  * `clientAddress`/geo are backfilled from ANY span in the same trace — on
  * Vercel these commonly land on a sibling (often the root layout render) span
  * rather than the request span itself, so reading only the representative row
@@ -631,7 +664,7 @@ export async function listTraces(
   }>(
     `with in_window as (
        select trace_id, span_id, name, start_ts, http_status_code,
-         attributes ->> 'http.route' as route
+         ${routeFromSpanSql("spans")} as route
        from spans
        where project = $1 and start_ts >= $2
          and not ${OUTBOUND_SPAN_SQL}
