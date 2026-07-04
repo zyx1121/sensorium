@@ -1,0 +1,8 @@
+{
+  "extends": "@sensorium/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,44 @@
+# OTel Collector in front of apps/ingest.
+#
+# A producer sends OTLP to this Collector; the Collector re-exports OTLP/HTTP
+# JSON to sensorium's apps/ingest with the project's bearer token attached.
+# This is the recommended path (batching, retry, protocol translation from
+# whatever the producer's SDK emits — including OTLP/gRPC or protobuf, which
+# apps/ingest itself does not accept in v0).
+#
+# Run: otelcol --config collector/config.yaml
+# (binary: https://opentelemetry.io/docs/collector/installation/)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp:
+    endpoint: http://localhost:8787
+    encoding: json
+    headers:
+      # One token per project — see .env.example / `bun run db:register-project`.
+      authorization: "Bearer ${env:SENSORIUM_INGEST_TOKEN}"
+
+processors:
+  batch: {}
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]

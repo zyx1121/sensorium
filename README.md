@@ -1,159 +1,83 @@
-# Turborepo starter
+# sensorium
 
-This Turborepo starter is maintained by the Turborepo core team.
+Agent-native observability. The consumer of this data is an agent doing
+maintenance/analysis over MCP — not a human staring at a dashboard. Multiple
+projects share one store, partitioned by OTel's native `service.namespace`.
 
-## Using this example
+## Architecture
 
-Run the following command:
+```mermaid
+flowchart LR
+    producer["producer\n(e.g. ai.winlab.tw)"] -->|"OTLP/HTTP\n+ per-project bearer"| ingest
+    collector["OTel Collector\n(optional, standard binary)"] -->|"OTLP/HTTP JSON\n+ per-project bearer"| ingest
+    producer -.->|"or straight to"| collector
 
-```sh
-npx create-turbo@latest
+    subgraph sensorium.zyx.tw
+        ingest["apps/ingest\n(Bun.serve, OTLP/HTTP receiver)"] --> pg[("Postgres\nlogs / spans / metric_points\n+ projects registry")]
+        mcp["apps/mcp\n(MCP server, read-only)"] --> pg
+    end
+
+    agent["agent (kilo)"] -->|"bearer"| mcp
 ```
 
-## What's inside?
+`packages/core` maps OTLP/JSON → row shapes (pure functions, unit tested).
+`packages/db` owns the Postgres schema, migrations, and query helpers shared
+by ingest (writes) and mcp (reads). See `collector/README.md` for the two
+supported ingest paths (Collector in front, vs. straight to `apps/ingest`).
 
-This Turborepo includes the following packages/apps:
+**Auth model**: an ingest bearer token is bound 1:1 to a project at
+registration time. The `service.namespace` a client claims in its OTLP
+payload is recorded for reference but never trusted for scoping — the token
+decides which project rows land in, full stop. The MCP endpoint has a single
+shared bearer token (one trusted consumer); reads are cross-project.
 
-### Apps and Packages
+## Workspace layout
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```
+apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON only in v0.
+apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, error_summary, search.
+packages/core/   Signal model + OTLP/JSON → row mapping (pure, unit tested) + span-tree builder.
+packages/db/     SQL migrations, migration runner, query helpers shared by ingest/mcp.
+collector/       OTel Collector config for producers that don't export OTLP/JSON directly.
 ```
 
-Without global `turbo`, use your package manager:
+## Local development
+
+Requires a Postgres reachable via `DATABASE_URL` (either `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`, or an existing local install).
 
 ```sh
-cd my-turborepo
-npx turbo build
-bun dlx turbo build
-bun exec turbo build
+bun install
+cp .env.example .env   # fill in DATABASE_URL, SENSORIUM_MCP_TOKEN
+
+bun run db:migrate                        # apply packages/db/migrations
+bun run db:register-project my-project    # prints an ingest token, once
+
+bun run --filter @sensorium/ingest dev    # :8787
+bun run --filter @sensorium/mcp dev       # :8788
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+Send it something:
 
 ```sh
-turbo build --filter=docs
+curl -X POST localhost:8787/v1/logs \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer <token from db:register-project>" \
+  -d '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"demo"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"'"$(date +%s)"'000000000","severityText":"INFO","body":{"stringValue":"hello sensorium"}}]}]}]}'
 ```
 
-Without global `turbo`:
+## Commands
 
 ```sh
-npx turbo build --filter=docs
-bun exec turbo build --filter=docs
-bun exec turbo build --filter=docs
+bun run build       # turbo build (packages: tsc; apps: bun build --target bun)
+bun run typecheck    # turbo typecheck (tsc --noEmit) across the workspace
+bun run test         # turbo test (bun test) — currently packages/core's OTLP mapping tests
+bun run lint         # eslint . (flat config, shared @sensorium/eslint-config)
 ```
 
-### Develop
+## v0 scope / known gaps
 
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo dev
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-bun exec turbo dev
-bun exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-bun exec turbo dev --filter=web
-bun exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-bun exec turbo login
-bun exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-bun exec turbo link
-bun exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+- Ingest only accepts OTLP/**JSON**, not protobuf — see `collector/README.md`.
+- Histogram metric points store the aggregate `sum` as `value`, not
+  per-bucket data — fine for "is this moving", not for percentiles.
+- No rate limiting / payload size caps on `apps/ingest` yet.
+- `apps/mcp`'s `search` tool is `ILIKE`, not full-text search.

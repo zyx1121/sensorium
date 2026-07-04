@@ -1,0 +1,23 @@
+{
+  "name": "@sensorium/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sensorium/core": "workspace:*",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@sensorium/typescript-config": "workspace:*",
+    "@types/bun": "^1.3.13",
+    "@types/pg": "^8.20.0",
+    "typescript": "^5.9.2"
+  }
+}
