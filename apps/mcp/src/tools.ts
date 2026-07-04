@@ -4,6 +4,7 @@ import { buildSpanTree } from "@sensorium/core";
 import {
   errorSummary,
   listProjects,
+  listTraces,
   queryLogs,
   queryTraceSpans,
   searchLogs,
@@ -80,6 +81,26 @@ export function registerTools(server: McpServer, pool: Pool): void {
   );
 
   server.registerTool(
+    "list_traces",
+    {
+      title: "List recent traces",
+      description:
+        "Browses the most recent inbound request spans for a project without needing a traceId up front — " +
+        "name, http.route, http_status_code, client.address (when the producer sets it), start time, and " +
+        "trace_id/span_id, newest first. Excludes outbound spans (this service's own fetch/db calls, e.g. " +
+        "calls to Supabase) so it only shows requests this service actually served. Feed a traceId from here " +
+        "into query_traces for the full span tree of one request.",
+      inputSchema: {
+        project: z.string(),
+        windowMinutes: z.number().int().positive().max(7 * 24 * 60).default(60),
+        limit: z.number().int().positive().max(1000).default(30),
+      },
+    },
+    async ({ project, windowMinutes, limit }) =>
+      textResult(await listTraces(pool, { project, windowMinutes, limit })),
+  );
+
+  server.registerTool(
     "error_summary",
     {
       title: "Error summary",
@@ -98,11 +119,13 @@ export function registerTools(server: McpServer, pool: Pool): void {
     {
       title: "Top request sources",
       description:
-        "Attack/traffic attribution: aggregates spans in a project over a recent time window by source IP " +
-        "(client.address), returning each IP's geo (country/city/region — most recent sighting), total " +
-        "request count, error count (OTLP error status or HTTP >= 400), and its top 5 routes (http.route) " +
-        "by hit count. Sorted by request count descending. Also returns a by-country rollup for " +
-        "'which countries are hitting us' at a glance.",
+        "Attack/traffic attribution: aggregates spans AND logs in a project over a recent time window by " +
+        "source IP (client.address) — some producers (e.g. Vercel) attach client.address/geo.* to a log " +
+        "record (429/401/error) rather than the span, so both are read. Returns each IP's geo " +
+        "(country/city/region — most recent sighting across either signal), total request/event count, " +
+        "error count (inbound spans: OTLP error status or HTTP >= 400, excluding this service's own outbound " +
+        "calls; logs: severity ERROR/FATAL), and its top 5 routes (http.route) by hit count. Sorted by count " +
+        "descending. Also returns a by-country rollup for 'which countries are hitting us' at a glance.",
       inputSchema: {
         project: z.string(),
         windowMinutes: z.number().int().positive().max(7 * 24 * 60).default(60),

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   buildSpanTree,
   isErrorSpan,
+  isInboundSpan,
+  isOutboundSpan,
   mapOtlpLogsToRows,
   mapOtlpMetricsToRows,
   mapOtlpTracesToRows,
@@ -153,6 +155,70 @@ describe("mapOtlpTracesToRows", () => {
     expect(child.httpStatusCode).toBeNull();
   });
 
+  test("outbound fetch spans never get httpStatusCode, even carrying a status attribute", () => {
+    const payload: OtlpTracesPayload = {
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "5b8aa5a2d2c872e8321cf37308d69df2",
+                  spanId: "bbbbbbbbbbbbbbbb",
+                  name: "fetch.GET",
+                  kind: 3, // client
+                  startTimeUnixNano: "1712345678000000000",
+                  endTimeUnixNano: "1712345678010000000",
+                  attributes: [
+                    { key: "http.client.name", value: { stringValue: "fetch" } },
+                    { key: "operation.name", value: { stringValue: "fetch.GET" } },
+                    { key: "http.host", value: { stringValue: "xyz.supabase.co" } },
+                    { key: "http.status_code", value: { intValue: "500" } },
+                  ],
+                  status: { code: 2 }, // error — the outbound call itself failed
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const rows = mapOtlpTracesToRows("ai-winlab", payload);
+    expect(rows[0]!.kind).toBe("client");
+    expect(rows[0]!.attributes["http.status_code"]).toBe(500);
+    expect(rows[0]!.httpStatusCode).toBeNull();
+  });
+
+  test("inbound spans without SERVER kind still get httpStatusCode via route-ish attributes", () => {
+    const payload: OtlpTracesPayload = {
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "5b8aa5a2d2c872e8321cf37308d69df2",
+                  spanId: "cccccccccccccccc",
+                  name: "GET /api/users",
+                  kind: 1, // internal — Vercel/Next.js root spans often show up this way
+                  startTimeUnixNano: "1712345678000000000",
+                  endTimeUnixNano: "1712345678010000000",
+                  attributes: [
+                    { key: "http.route", value: { stringValue: "/api/users" } },
+                    { key: "http.status_code", value: { intValue: "404" } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const rows = mapOtlpTracesToRows("ai-winlab", payload);
+    expect(rows[0]!.kind).toBe("internal");
+    expect(rows[0]!.httpStatusCode).toBe(404);
+  });
+
   test("httpStatusCode prefers the current semconv attribute over the legacy one", () => {
     const payload: OtlpTracesPayload = {
       resourceSpans: [
@@ -164,6 +230,7 @@ describe("mapOtlpTracesToRows", () => {
                   traceId: "5b8aa5a2d2c872e8321cf37308d69df2",
                   spanId: "aaaaaaaaaaaaaaaa",
                   name: "GET /missing",
+                  kind: 2, // server — inbound, so httpStatusCode gets populated
                   startTimeUnixNano: "1712345678000000000",
                   endTimeUnixNano: "1712345678010000000",
                   attributes: [
@@ -210,20 +277,63 @@ describe("mapOtlpMetricsToRows", () => {
   });
 });
 
+describe("isOutboundSpan / isInboundSpan", () => {
+  test("http.client.name marks a span outbound regardless of kind", () => {
+    const span = { kind: "internal" as const, attributes: { "http.client.name": "fetch" } };
+    expect(isOutboundSpan(span)).toBe(true);
+    expect(isInboundSpan(span)).toBe(false);
+  });
+
+  test("operation.name starting with 'fetch' marks a span outbound", () => {
+    const span = { kind: "internal" as const, attributes: { "operation.name": "fetch.GET" } };
+    expect(isOutboundSpan(span)).toBe(true);
+  });
+
+  test("kind === 'client' marks a span outbound even with no other hints", () => {
+    const span = { kind: "client" as const, attributes: {} };
+    expect(isOutboundSpan(span)).toBe(true);
+  });
+
+  test("kind === 'server' is inbound", () => {
+    const span = { kind: "server" as const, attributes: {} };
+    expect(isInboundSpan(span)).toBe(true);
+  });
+
+  test("route-ish attributes count as inbound when kind isn't SERVER", () => {
+    expect(isInboundSpan({ kind: "internal" as const, attributes: { "http.route": "/x" } })).toBe(true);
+    expect(isInboundSpan({ kind: "internal" as const, attributes: { "http.target": "/x" } })).toBe(true);
+    expect(isInboundSpan({ kind: "internal" as const, attributes: { "vercel.matched_path": "/x" } })).toBe(true);
+  });
+
+  test("no hints at all is neither outbound nor inbound", () => {
+    const span = { kind: "internal" as const, attributes: {} };
+    expect(isOutboundSpan(span)).toBe(false);
+    expect(isInboundSpan(span)).toBe(false);
+  });
+});
+
 describe("isErrorSpan", () => {
+  const inbound = { kind: "server" as const, attributes: {} };
+
   test("OTLP status ERROR counts, regardless of HTTP status", () => {
-    expect(isErrorSpan({ statusCode: "error", httpStatusCode: null })).toBe(true);
-    expect(isErrorSpan({ statusCode: "error", httpStatusCode: 200 })).toBe(true);
+    expect(isErrorSpan({ statusCode: "error", httpStatusCode: null, ...inbound })).toBe(true);
+    expect(isErrorSpan({ statusCode: "error", httpStatusCode: 200, ...inbound })).toBe(true);
   });
 
   test("HTTP >= 400 counts even without an explicit OTLP error status (401/429/404 visibility)", () => {
-    expect(isErrorSpan({ statusCode: null, httpStatusCode: 404 })).toBe(true);
-    expect(isErrorSpan({ statusCode: "unset", httpStatusCode: 401 })).toBe(true);
-    expect(isErrorSpan({ statusCode: "ok", httpStatusCode: 429 })).toBe(true);
+    expect(isErrorSpan({ statusCode: null, httpStatusCode: 404, ...inbound })).toBe(true);
+    expect(isErrorSpan({ statusCode: "unset", httpStatusCode: 401, ...inbound })).toBe(true);
+    expect(isErrorSpan({ statusCode: "ok", httpStatusCode: 429, ...inbound })).toBe(true);
   });
 
   test("HTTP 200 and no OTLP error status does not count", () => {
-    expect(isErrorSpan({ statusCode: "ok", httpStatusCode: 200 })).toBe(false);
-    expect(isErrorSpan({ statusCode: "unset", httpStatusCode: null })).toBe(false);
+    expect(isErrorSpan({ statusCode: "ok", httpStatusCode: 200, ...inbound })).toBe(false);
+    expect(isErrorSpan({ statusCode: "unset", httpStatusCode: null, ...inbound })).toBe(false);
+  });
+
+  test("an outbound span never counts as an error, even with ERROR status or HTTP 500", () => {
+    const outbound = { kind: "client" as const, attributes: { "http.client.name": "fetch" } };
+    expect(isErrorSpan({ statusCode: "error", httpStatusCode: 500, ...outbound })).toBe(false);
+    expect(isErrorSpan({ statusCode: null, httpStatusCode: 500, ...outbound })).toBe(false);
   });
 });

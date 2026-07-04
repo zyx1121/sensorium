@@ -235,6 +235,26 @@ const LOG_COLUMNS = "project, ts, severity, body, trace_id, span_id, resource, a
 const SPAN_COLUMNS =
   "project, trace_id, span_id, parent_span_id, name, kind, start_ts, end_ts, duration_ms, status_code, http_status_code, resource, attributes";
 
+/**
+ * SQL mirror of `packages/core`'s `isOutboundSpan()` — spans that are this service
+ * calling OUT (e.g. `fetch()` to Supabase), not inbound requests it served. Used to
+ * keep the callee's status out of `errorSummary`/`topSources`/`listTraces`. Keep in
+ * sync with `isOutboundSpan` if that predicate changes.
+ */
+const OUTBOUND_SPAN_SQL = `(
+    attributes ? 'http.client.name'
+    or coalesce(attributes ->> 'operation.name', '') ilike 'fetch%'
+    or kind = 'client'
+  )`;
+
+/** SQL mirror of `isInboundSpan()` — the fallback half not covered by `OUTBOUND_SPAN_SQL`. */
+const INBOUND_SPAN_SQL = `(
+    kind = 'server'
+    or attributes ->> 'http.route' is not null
+    or attributes ->> 'http.target' is not null
+    or attributes ->> 'vercel.matched_path' is not null
+  )`;
+
 export interface QueryLogsParams {
   project: string;
   since: Date;
@@ -316,11 +336,14 @@ export async function errorSummary(
     ),
     // Mirrors packages/core's isErrorSpan(): an explicit OTLP ERROR status counts,
     // and so does any HTTP 4xx/5xx (401/429/404s need to show up for attack
-    // visibility, not just spans a producer bothered to mark ERROR).
+    // visibility, not just spans a producer bothered to mark ERROR). Outbound spans
+    // (this service's own fetch/db calls) are excluded — a callee's failure isn't
+    // this service's error.
     pool.query<{ count: string }>(
       `select count(*) from spans
        where project = $1 and start_ts >= $2
-       and (status_code = 'error' or http_status_code >= 400)`,
+       and (status_code = 'error' or http_status_code >= 400)
+       and not ${OUTBOUND_SPAN_SQL}`,
       [params.project, since],
     ),
     pool.query<{ body: string; count: string }>(
@@ -368,11 +391,16 @@ export interface TopSourcesResult {
 }
 
 /**
- * Attribution/triage view over spans: who (client.address / geo.*) is calling what
- * (http.route), how often, and with how many errors. Same error rule as
- * `errorSummary()` — OTLP error status or HTTP >= 400 — read from the promoted
- * `status_code`/`http_status_code` columns, not re-derived from `attributes`.
- * `ip`/`route`/`geo.*` stay in `attributes` (jsonb) for v1; no new columns.
+ * Attribution/triage view over spans UNION logs: who (client.address / geo.*) is
+ * calling what (http.route), how often, and with how many errors. On Vercel, the
+ * `client.address`/`geo.*` attribution can land on either signal — a 429/401 often
+ * shows up as a log record while the app's own root span never carries it — so
+ * this reads whichever side has it, per source IP.
+ *
+ * Error rule: for spans, same as `errorSummary()` (OTLP error status or HTTP >= 400,
+ * excluding outbound spans — see `OUTBOUND_SPAN_SQL`) read from the promoted
+ * `status_code`/`http_status_code` columns; for logs, `severity in ('ERROR',
+ * 'FATAL')`. `ip`/`route`/`geo.*` stay in `attributes` (jsonb) for v1; no new columns.
  */
 export async function topSources(
   pool: Pool,
@@ -380,6 +408,38 @@ export async function topSources(
 ): Promise<TopSourcesResult> {
   const since = new Date(Date.now() - params.windowMinutes * 60_000);
   const limit = Math.min(params.limit ?? 20, 1000);
+
+  // Shared by both queries below: spans+logs normalized to the same shape, filtered
+  // to rows that carry a `client.address`. Outbound spans are dropped outright — an
+  // attacker's IP never shows up on this service's own fetch-to-Supabase spans, and
+  // excluding them keeps the error math from `errorSummary()` consistent here.
+  const combinedCte = `
+    with combined as (
+      select
+        attributes ->> 'client.address' as ip,
+        attributes ->> 'geo.country' as country,
+        attributes ->> 'geo.city' as city,
+        attributes ->> 'geo.region' as region,
+        attributes ->> 'http.route' as route,
+        start_ts as ts,
+        (status_code = 'error' or http_status_code >= 400) as is_error
+      from spans
+      where project = $1 and start_ts >= $2
+        and attributes ->> 'client.address' is not null
+        and not ${OUTBOUND_SPAN_SQL}
+      union all
+      select
+        attributes ->> 'client.address' as ip,
+        attributes ->> 'geo.country' as country,
+        attributes ->> 'geo.city' as city,
+        attributes ->> 'geo.region' as region,
+        attributes ->> 'http.route' as route,
+        ts,
+        (severity in ('ERROR', 'FATAL')) as is_error
+      from logs
+      where project = $1 and ts >= $2 and attributes ->> 'client.address' is not null
+    )
+  `;
 
   const [sourcesRes, countryRes] = await Promise.all([
     pool.query<{
@@ -391,34 +451,23 @@ export async function topSources(
       region: string | null;
       top_routes: TopSourceRoute[];
     }>(
-      `with filtered as (
-         select
-           attributes ->> 'client.address' as ip,
-           attributes ->> 'geo.country' as country,
-           attributes ->> 'geo.city' as city,
-           attributes ->> 'geo.region' as region,
-           attributes ->> 'http.route' as route,
-           start_ts,
-           (status_code = 'error' or http_status_code >= 400) as is_error
-         from spans
-         where project = $1 and start_ts >= $2 and attributes ->> 'client.address' is not null
-       ),
+      `${combinedCte},
        agg as (
          select ip, count(*) as total, count(*) filter (where is_error) as errors
-         from filtered
+         from combined
          group by ip
        ),
        -- geo for an IP can drift (VPN/mobile carrier reassignment); take the most
-       -- recent span's geo, not an arbitrary one.
+       -- recent sighting's geo (span or log, whichever is newer), not an arbitrary one.
        latest_geo as (
          select distinct on (ip) ip, country, city, region
-         from filtered
-         order by ip, start_ts desc
+         from combined
+         order by ip, ts desc
        ),
        ranked_routes as (
          select ip, route, count(*) as cnt,
            row_number() over (partition by ip order by count(*) desc, route asc) as rn
-         from filtered
+         from combined
          where route is not null
          group by ip, route
        ),
@@ -440,13 +489,13 @@ export async function topSources(
       [params.project, since, limit],
     ),
     pool.query<{ country: string; total: string; errors: string }>(
-      `select
-         coalesce(attributes ->> 'geo.country', 'unknown') as country,
+      `${combinedCte}
+       select
+         coalesce(country, 'unknown') as country,
          count(*) as total,
-         count(*) filter (where status_code = 'error' or http_status_code >= 400) as errors
-       from spans
-       where project = $1 and start_ts >= $2 and attributes ->> 'client.address' is not null
-       group by country
+         count(*) filter (where is_error) as errors
+       from combined
+       group by coalesce(country, 'unknown')
        order by total desc, country asc`,
       [params.project, since],
     ),
@@ -468,6 +517,72 @@ export async function topSources(
       country: r.country,
       requestCount: Number(r.total),
       errorCount: Number(r.errors),
+    })),
+  };
+}
+
+export interface RecentTrace {
+  traceId: string;
+  spanId: string;
+  name: string;
+  route: string | null;
+  httpStatusCode: number | null;
+  clientAddress: string | null;
+  startTs: Date;
+}
+
+export interface ListTracesResult {
+  project: string;
+  windowMinutes: number;
+  traces: RecentTrace[];
+}
+
+/**
+ * Browsing entry point for when you don't have a traceId yet: the most recent
+ * inbound request spans for a project (server-kind, or carrying route-ish
+ * attributes — see `INBOUND_SPAN_SQL`/`isInboundSpan`), newest first. Excludes
+ * outbound spans (this service's own fetch/db calls) the same way
+ * `errorSummary`/`topSources` do. Feed a `traceId` from here into `query_traces`
+ * to pull the full span tree for one request.
+ */
+export async function listTraces(
+  pool: Pool,
+  params: { project: string; windowMinutes: number; limit?: number },
+): Promise<ListTracesResult> {
+  const since = new Date(Date.now() - params.windowMinutes * 60_000);
+  const limit = Math.min(params.limit ?? 30, 1000);
+  const { rows } = await pool.query<{
+    trace_id: string;
+    span_id: string;
+    name: string;
+    start_ts: Date;
+    route: string | null;
+    http_status_code: number | null;
+    client_address: string | null;
+  }>(
+    `select
+       trace_id, span_id, name, start_ts, http_status_code,
+       attributes ->> 'http.route' as route,
+       attributes ->> 'client.address' as client_address
+     from spans
+     where project = $1 and start_ts >= $2
+       and not ${OUTBOUND_SPAN_SQL}
+       and ${INBOUND_SPAN_SQL}
+     order by start_ts desc
+     limit $3`,
+    [params.project, since, limit],
+  );
+  return {
+    project: params.project,
+    windowMinutes: params.windowMinutes,
+    traces: rows.map((r) => ({
+      traceId: r.trace_id,
+      spanId: r.span_id,
+      name: r.name,
+      route: r.route,
+      httpStatusCode: r.http_status_code,
+      clientAddress: r.client_address,
+      startTs: r.start_ts,
     })),
   };
 }
