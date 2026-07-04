@@ -35,7 +35,7 @@ shared bearer token (one trusted consumer); reads are cross-project.
 
 ```
 apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON or OTLP/protobuf.
-apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, error_summary, search.
+apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, error_summary, top_sources, search.
 packages/core/   Signal model + OTLP/JSON → row mapping (pure, unit tested) + span-tree builder.
 packages/db/     SQL migrations, migration runner, query helpers shared by ingest/mcp.
 collector/       OTel Collector config for producers that don't export OTLP/JSON directly.
@@ -70,7 +70,8 @@ curl -X POST localhost:8787/v1/logs \
 ```sh
 bun run build       # turbo build (packages: tsc; apps: bun build --target bun)
 bun run typecheck    # turbo typecheck (tsc --noEmit) across the workspace
-bun run test         # turbo test (bun test) — currently packages/core's OTLP mapping tests
+bun run test         # turbo test (bun test) — packages/core + apps/ingest are pure unit tests;
+                     # packages/db has DATABASE_URL-gated integration tests (skipped, not failed, if unset)
 bun run lint         # eslint . (flat config, shared @sensorium/eslint-config)
 ```
 
@@ -83,3 +84,6 @@ bun run lint         # eslint . (flat config, shared @sensorium/eslint-config)
   per-bucket data — fine for "is this moving", not for percentiles.
 - No rate limiting / payload size caps on `apps/ingest` yet.
 - `apps/mcp`'s `search` tool is `ILIKE`, not full-text search.
+- `top_sources`'s geo/route breakdown reads `client.address`/`geo.*`/`http.route`
+  straight out of `attributes` (jsonb) — no dedicated columns/indexes yet. Fine at
+  v0 volume; revisit (generated columns + index) if it's slow at scale.

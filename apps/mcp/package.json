@@ -13,7 +13,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@sensorium/core": "workspace:*",
     "@sensorium/db": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@sensorium/typescript-config": "workspace:*",
