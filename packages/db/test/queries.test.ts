@@ -25,7 +25,9 @@ describe.skipIf(!DATABASE_URL)("topSources + source filters (integration, requir
   function makeSpan(overrides: Partial<SpanRow> & Pick<SpanRow, "attributes" | "startTs" | "endTs">): SpanRow {
     return {
       project,
-      traceId: "5b8aa5a2d2c872e8321cf37308d69df2",
+      // Distinct per span by default (real requests each get their own trace_id) —
+      // tests that need sibling spans in ONE trace override this explicitly.
+      traceId: Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32),
       spanId: Math.random().toString(16).slice(2).padEnd(16, "0").slice(0, 16),
       parentSpanId: null,
       name: "handler",
@@ -237,7 +239,9 @@ describe.skipIf(!DATABASE_URL)("errorSummary + listTraces inbound-only (integrat
   function makeSpan(overrides: Partial<SpanRow> & Pick<SpanRow, "attributes" | "startTs" | "endTs">): SpanRow {
     return {
       project,
-      traceId: "5b8aa5a2d2c872e8321cf37308d69df2",
+      // Distinct per span by default (real requests each get their own trace_id) —
+      // tests that need sibling spans in ONE trace override this explicitly.
+      traceId: Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32),
       spanId: Math.random().toString(16).slice(2).padEnd(16, "0").slice(0, 16),
       parentSpanId: null,
       name: "handler",
@@ -310,6 +314,171 @@ describe.skipIf(!DATABASE_URL)("errorSummary + listTraces inbound-only (integrat
     expect(result.traces.some((t) => t.name === "fetch.GET")).toBe(false);
     expect(result.traces[0]!.httpStatusCode).toBe(404);
     expect(result.traces[0]!.route).toBe("/api/missing");
-    expect(result.traces[0]!.traceId).toBe("5b8aa5a2d2c872e8321cf37308d69df2");
+    // Each span in this fixture is its own trace (makeSpan's default traceId is
+    // random per span) — one distinct trace_id per row, still no cross-trace mixing.
+    expect(new Set(result.traces.map((t) => t.traceId)).size).toBe(2);
   });
 });
+
+describe.skipIf(!DATABASE_URL)(
+  "trace-level join: client.address on one span, http.route on a sibling span (integration, requires DATABASE_URL)",
+  () => {
+    let pool: Pool;
+    let now: number;
+    const project = `test-tracejoin-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+    // Real shape on Vercel (per live investigation): the root layout render span
+    // carries client.address/geo.* with no http.route, while the sibling request
+    // span in the SAME trace carries http.route/status with no client.address.
+    function span(
+      overrides: Partial<SpanRow> & Pick<SpanRow, "attributes" | "traceId" | "spanId" | "startTs" | "endTs">,
+    ): SpanRow {
+      return {
+        project,
+        parentSpanId: null,
+        name: "span",
+        kind: "internal",
+        durationMs: 5,
+        statusCode: null,
+        httpStatusCode: null,
+        resource: {},
+        ...overrides,
+      };
+    }
+
+    beforeAll(async () => {
+      pool = new Pool({ connectionString: DATABASE_URL });
+      await runMigrations(pool);
+      await createProject(pool, project, `token-${project}`);
+
+      now = Date.now();
+
+      await insertSpans(pool, [
+        // Trace A — ip1's first request: layout span carries ip/geo, no route;
+        // sibling request span carries route/status, no ip.
+        span({
+          traceId: "trace-a",
+          spanId: "span-a-layout",
+          name: "root layout",
+          startTs: new Date(now - 5 * 60_000),
+          endTs: new Date(now - 5 * 60_000 + 10),
+          attributes: {
+            "client.address": "140.113.194.1",
+            "geo.country": "TW",
+            "geo.city": "Taipei",
+            "geo.region": "Taipei City",
+          },
+        }),
+        span({
+          traceId: "trace-a",
+          spanId: "span-a-request",
+          name: "GET /profile/[id]/page",
+          startTs: new Date(now - 5 * 60_000 + 1),
+          endTs: new Date(now - 5 * 60_000 + 11),
+          statusCode: "ok",
+          httpStatusCode: 200,
+          attributes: { "http.route": "/profile/[id]/page" },
+        }),
+        // Trace B — ip1's second request, in a DIFFERENT trace, that errors
+        // (500). Proves topRoutes/errorCount are joined per-trace, not just
+        // read off whichever single row happened to carry the ip.
+        span({
+          traceId: "trace-b",
+          spanId: "span-b-layout",
+          name: "root layout",
+          startTs: new Date(now - 4 * 60_000),
+          endTs: new Date(now - 4 * 60_000 + 10),
+          attributes: {
+            "client.address": "140.113.194.1",
+            "geo.country": "TW",
+            "geo.city": "Taipei",
+            "geo.region": "Taipei City",
+          },
+        }),
+        span({
+          traceId: "trace-b",
+          spanId: "span-b-request",
+          name: "GET /api/orders",
+          startTs: new Date(now - 4 * 60_000 + 1),
+          endTs: new Date(now - 4 * 60_000 + 11),
+          statusCode: "error",
+          httpStatusCode: 500,
+          attributes: { "http.route": "/api/orders" },
+        }),
+        // Trace C — a different ip entirely, must not leak into ip1's routes.
+        span({
+          traceId: "trace-c",
+          spanId: "span-c-layout",
+          name: "root layout",
+          startTs: new Date(now - 3 * 60_000),
+          endTs: new Date(now - 3 * 60_000 + 10),
+          attributes: {
+            "client.address": "5.6.7.8",
+            "geo.country": "US",
+            "geo.city": "New York",
+            "geo.region": "NY",
+          },
+        }),
+        span({
+          traceId: "trace-c",
+          spanId: "span-c-request",
+          name: "GET /home",
+          startTs: new Date(now - 3 * 60_000 + 1),
+          endTs: new Date(now - 3 * 60_000 + 11),
+          statusCode: "ok",
+          httpStatusCode: 200,
+          attributes: { "http.route": "/home" },
+        }),
+      ]);
+    });
+
+    afterAll(async () => {
+      await pool.query("delete from spans where project = $1", [project]);
+      await pool.query("delete from projects where name = $1", [project]);
+      await pool.end();
+    });
+
+    test("topSources recovers topRoutes/errorCount from the sibling request span via trace_id, across multiple traces/ips", async () => {
+      const result = await topSources(pool, { project, windowMinutes: 60 });
+      expect(result.sources).toHaveLength(2);
+
+      const ip1 = result.sources.find((s) => s.ip === "140.113.194.1")!;
+      expect(ip1.requestCount).toBe(2); // the 2 layout spans that carried the ip (unchanged rule)
+      expect(ip1.errorCount).toBe(1); // trace-b's 500, joined in via trace_id
+      expect(ip1.topRoutes).toEqual([
+        { route: "/api/orders", count: 1 },
+        { route: "/profile/[id]/page", count: 1 },
+      ]);
+      expect(ip1.country).toBe("TW");
+
+      const ip2 = result.sources.find((s) => s.ip === "5.6.7.8")!;
+      expect(ip2.requestCount).toBe(1);
+      expect(ip2.errorCount).toBe(0);
+      expect(ip2.topRoutes).toEqual([{ route: "/home", count: 1 }]);
+    });
+
+    test("listTraces dedupes by trace_id (one row per trace) and backfills clientAddress/geo from the sibling layout span", async () => {
+      const result = await listTraces(pool, { project, windowMinutes: 60 });
+      expect(result.traces).toHaveLength(3); // one row per trace, not per span
+
+      const traceA = result.traces.find((t) => t.traceId === "trace-a")!;
+      expect(traceA.name).toBe("GET /profile/[id]/page");
+      expect(traceA.route).toBe("/profile/[id]/page");
+      expect(traceA.httpStatusCode).toBe(200);
+      expect(traceA.clientAddress).toBe("140.113.194.1"); // backfilled from span-a-layout
+      expect(traceA.country).toBe("TW");
+
+      const traceB = result.traces.find((t) => t.traceId === "trace-b")!;
+      expect(traceB.route).toBe("/api/orders");
+      expect(traceB.httpStatusCode).toBe(500);
+      expect(traceB.clientAddress).toBe("140.113.194.1");
+
+      const traceC = result.traces.find((t) => t.traceId === "trace-c")!;
+      expect(traceC.clientAddress).toBe("5.6.7.8");
+      expect(traceC.country).toBe("US");
+
+      // Newest first across traces: trace-c (3m ago), trace-b (4m ago), trace-a (5m ago).
+      expect(result.traces.map((t) => t.traceId)).toEqual(["trace-c", "trace-b", "trace-a"]);
+    });
+  },
+);
