@@ -242,6 +242,10 @@ export interface QueryLogsParams {
   severity?: string;
   contains?: string;
   traceId?: string;
+  /** Exact match against the `client.address` attribute (attacker-IP triage). */
+  ip?: string;
+  /** Exact match against the `http.route` attribute. */
+  route?: string;
   limit?: number;
 }
 
@@ -263,6 +267,14 @@ export async function queryLogs(pool: Pool, params: QueryLogsParams): Promise<Lo
   if (params.traceId) {
     values.push(params.traceId);
     conditions.push(`trace_id = $${values.length}`);
+  }
+  if (params.ip) {
+    values.push(params.ip);
+    conditions.push(`attributes ->> 'client.address' = $${values.length}`);
+  }
+  if (params.route) {
+    values.push(params.route);
+    conditions.push(`attributes ->> 'http.route' = $${values.length}`);
   }
   const limit = Math.min(params.limit ?? 100, 1000);
   values.push(limit);
@@ -324,6 +336,139 @@ export async function errorSummary(
     errorLogCount: Number(logCountRes.rows[0]?.count ?? 0),
     errorSpanCount: Number(spanCountRes.rows[0]?.count ?? 0),
     topMessages: topRes.rows.map((r) => ({ body: r.body, count: Number(r.count) })),
+  };
+}
+
+export interface TopSourceRoute {
+  route: string;
+  count: number;
+}
+
+export interface TopSource {
+  ip: string;
+  country: string | null;
+  city: string | null;
+  region: string | null;
+  requestCount: number;
+  errorCount: number;
+  topRoutes: TopSourceRoute[];
+}
+
+export interface CountrySummary {
+  country: string;
+  requestCount: number;
+  errorCount: number;
+}
+
+export interface TopSourcesResult {
+  project: string;
+  windowMinutes: number;
+  sources: TopSource[];
+  byCountry: CountrySummary[];
+}
+
+/**
+ * Attribution/triage view over spans: who (client.address / geo.*) is calling what
+ * (http.route), how often, and with how many errors. Same error rule as
+ * `errorSummary()` — OTLP error status or HTTP >= 400 — read from the promoted
+ * `status_code`/`http_status_code` columns, not re-derived from `attributes`.
+ * `ip`/`route`/`geo.*` stay in `attributes` (jsonb) for v1; no new columns.
+ */
+export async function topSources(
+  pool: Pool,
+  params: { project: string; windowMinutes: number; limit?: number },
+): Promise<TopSourcesResult> {
+  const since = new Date(Date.now() - params.windowMinutes * 60_000);
+  const limit = Math.min(params.limit ?? 20, 1000);
+
+  const [sourcesRes, countryRes] = await Promise.all([
+    pool.query<{
+      ip: string;
+      total: string;
+      errors: string;
+      country: string | null;
+      city: string | null;
+      region: string | null;
+      top_routes: TopSourceRoute[];
+    }>(
+      `with filtered as (
+         select
+           attributes ->> 'client.address' as ip,
+           attributes ->> 'geo.country' as country,
+           attributes ->> 'geo.city' as city,
+           attributes ->> 'geo.region' as region,
+           attributes ->> 'http.route' as route,
+           start_ts,
+           (status_code = 'error' or http_status_code >= 400) as is_error
+         from spans
+         where project = $1 and start_ts >= $2 and attributes ->> 'client.address' is not null
+       ),
+       agg as (
+         select ip, count(*) as total, count(*) filter (where is_error) as errors
+         from filtered
+         group by ip
+       ),
+       -- geo for an IP can drift (VPN/mobile carrier reassignment); take the most
+       -- recent span's geo, not an arbitrary one.
+       latest_geo as (
+         select distinct on (ip) ip, country, city, region
+         from filtered
+         order by ip, start_ts desc
+       ),
+       ranked_routes as (
+         select ip, route, count(*) as cnt,
+           row_number() over (partition by ip order by count(*) desc, route asc) as rn
+         from filtered
+         where route is not null
+         group by ip, route
+       ),
+       routes as (
+         select ip, route, cnt from ranked_routes where rn <= 5
+       )
+       select a.ip, a.total, a.errors, g.country, g.city, g.region,
+         coalesce(
+           json_agg(json_build_object('route', r.route, 'count', r.cnt) order by r.cnt desc, r.route asc)
+             filter (where r.route is not null),
+           '[]'
+         ) as top_routes
+       from agg a
+       left join latest_geo g on g.ip = a.ip
+       left join routes r on r.ip = a.ip
+       group by a.ip, a.total, a.errors, g.country, g.city, g.region
+       order by a.total desc, a.ip asc
+       limit $3`,
+      [params.project, since, limit],
+    ),
+    pool.query<{ country: string; total: string; errors: string }>(
+      `select
+         coalesce(attributes ->> 'geo.country', 'unknown') as country,
+         count(*) as total,
+         count(*) filter (where status_code = 'error' or http_status_code >= 400) as errors
+       from spans
+       where project = $1 and start_ts >= $2 and attributes ->> 'client.address' is not null
+       group by country
+       order by total desc, country asc`,
+      [params.project, since],
+    ),
+  ]);
+
+  return {
+    project: params.project,
+    windowMinutes: params.windowMinutes,
+    sources: sourcesRes.rows.map((r) => ({
+      ip: r.ip,
+      country: r.country,
+      city: r.city,
+      region: r.region,
+      requestCount: Number(r.total),
+      errorCount: Number(r.errors),
+      topRoutes: r.top_routes,
+    })),
+    byCountry: countryRes.rows.map((r) => ({
+      country: r.country,
+      requestCount: Number(r.total),
+      errorCount: Number(r.errors),
+    })),
   };
 }
 

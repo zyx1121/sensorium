@@ -1,7 +1,15 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { buildSpanTree } from "@sensorium/core";
-import { errorSummary, listProjects, queryLogs, queryTraceSpans, searchLogs, type Pool } from "@sensorium/db";
+import {
+  errorSummary,
+  listProjects,
+  queryLogs,
+  queryTraceSpans,
+  searchLogs,
+  topSources,
+  type Pool,
+} from "@sensorium/db";
 import { z } from "zod";
 
 function textResult(data: unknown): CallToolResult {
@@ -24,7 +32,9 @@ export function registerTools(server: McpServer, pool: Pool): void {
     {
       title: "Query logs",
       description:
-        "Queries logs for a project within a time window, optionally filtered by severity, trace_id, or a body substring.",
+        "Queries logs for a project within a time window, optionally filtered by severity, trace_id, a body substring, " +
+        "source IP (client.address), or route (http.route). Returns full attributes per row, including " +
+        "client.address/geo.country/geo.city/geo.region/http.route when the producer sets them.",
       inputSchema: {
         project: z.string(),
         since: z.string().datetime().describe("ISO 8601 timestamp, inclusive lower bound"),
@@ -32,10 +42,12 @@ export function registerTools(server: McpServer, pool: Pool): void {
         severity: z.string().optional(),
         contains: z.string().optional().describe("substring to match against log body (case-insensitive)"),
         traceId: z.string().optional(),
+        ip: z.string().optional().describe("exact match against the client.address attribute"),
+        route: z.string().optional().describe("exact match against the http.route attribute"),
         limit: z.number().int().positive().max(1000).optional(),
       },
     },
-    async ({ project, since, until, severity, contains, traceId, limit }) => {
+    async ({ project, since, until, severity, contains, traceId, ip, route, limit }) => {
       const rows = await queryLogs(pool, {
         project,
         since: new Date(since),
@@ -43,6 +55,8 @@ export function registerTools(server: McpServer, pool: Pool): void {
         severity,
         contains,
         traceId,
+        ip,
+        route,
         limit,
       });
       return textResult(rows);
@@ -77,6 +91,25 @@ export function registerTools(server: McpServer, pool: Pool): void {
       },
     },
     async ({ project, windowMinutes }) => textResult(await errorSummary(pool, { project, windowMinutes })),
+  );
+
+  server.registerTool(
+    "top_sources",
+    {
+      title: "Top request sources",
+      description:
+        "Attack/traffic attribution: aggregates spans in a project over a recent time window by source IP " +
+        "(client.address), returning each IP's geo (country/city/region — most recent sighting), total " +
+        "request count, error count (OTLP error status or HTTP >= 400), and its top 5 routes (http.route) " +
+        "by hit count. Sorted by request count descending. Also returns a by-country rollup for " +
+        "'which countries are hitting us' at a glance.",
+      inputSchema: {
+        project: z.string(),
+        windowMinutes: z.number().int().positive().max(7 * 24 * 60).default(60),
+        limit: z.number().int().positive().max(1000).default(20).describe("max number of source IPs to return"),
+      },
+    },
+    async ({ project, windowMinutes, limit }) => textResult(await topSources(pool, { project, windowMinutes, limit })),
   );
 
   server.registerTool(
