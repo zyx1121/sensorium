@@ -8,7 +8,7 @@ import {
   type OtlpResource,
   type OtlpTracesPayload,
 } from "./otlp-json.js";
-import type { LogRow, MetricPointRow, SpanRow } from "./rows.js";
+import { isInboundSpan, type LogRow, type MetricPointRow, type SpanRow } from "./rows.js";
 
 /** Nanosecond epoch string (int64-as-string in OTLP/JSON) → Date, without losing precision to Number(). */
 export function nanosToDate(nanos: string | number): Date {
@@ -100,18 +100,19 @@ export function mapOtlpTracesToRows(project: string, payload: OtlpTracesPayload)
         const startTs = nanosToDate(span.startTimeUnixNano);
         const endTs = nanosToDate(span.endTimeUnixNano);
         const attributes = keyValuesToObject(span.attributes);
+        const kind = spanKindFromProto(span.kind);
         rows.push({
           project,
           traceId: span.traceId,
           spanId: span.spanId,
           parentSpanId: span.parentSpanId ?? null,
           name: span.name,
-          kind: spanKindFromProto(span.kind),
+          kind,
           startTs,
           endTs,
           durationMs: Math.max(0, endTs.getTime() - startTs.getTime()),
           statusCode: statusCodeFromProto(span.status?.code),
-          httpStatusCode: httpStatusCodeFromAttributes(attributes),
+          httpStatusCode: isInboundSpan({ kind, attributes }) ? httpStatusCodeFromAttributes(attributes) : null,
           resource,
           attributes,
         });

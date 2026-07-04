@@ -35,7 +35,7 @@ shared bearer token (one trusted consumer); reads are cross-project.
 
 ```
 apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON or OTLP/protobuf.
-apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, error_summary, top_sources, search.
+apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, list_traces, error_summary, top_sources, search.
 packages/core/   Signal model + OTLP/JSON → row mapping (pure, unit tested) + span-tree builder.
 packages/db/     SQL migrations, migration runner, query helpers shared by ingest/mcp.
 collector/       OTel Collector config for producers that don't export OTLP/JSON directly.
@@ -84,6 +84,13 @@ bun run lint         # eslint . (flat config, shared @sensorium/eslint-config)
   per-bucket data — fine for "is this moving", not for percentiles.
 - No rate limiting / payload size caps on `apps/ingest` yet.
 - `apps/mcp`'s `search` tool is `ILIKE`, not full-text search.
-- `top_sources`'s geo/route breakdown reads `client.address`/`geo.*`/`http.route`
-  straight out of `attributes` (jsonb) — no dedicated columns/indexes yet. Fine at
-  v0 volume; revisit (generated columns + index) if it's slow at scale.
+- `top_sources` unions spans and logs by `client.address` — some producers (e.g.
+  Vercel) attach attribution to a log record (429/401) rather than the span. Its
+  geo/route breakdown still reads `client.address`/`geo.*`/`http.route` straight out
+  of `attributes` (jsonb) — no dedicated columns/indexes yet. Fine at v0 volume;
+  revisit (generated columns + index) if it's slow at scale.
+- `http_status_code` is only populated on spans classified as inbound (`kind =
+  "server"`, or carrying `http.route`/`http.target`/`vercel.matched_path`) — outbound
+  spans (this service's own `fetch()` calls) never get it, so a callee's status can't
+  pollute `error_summary`/`top_sources`. See `isInboundSpan`/`isOutboundSpan` in
+  `packages/core`.
