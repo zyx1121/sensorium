@@ -397,6 +397,15 @@ export interface TopSourcesResult {
  * shows up as a log record while the app's own root span never carries it — so
  * this reads whichever side has it, per source IP.
  *
+ * `requestCount`/geo/`byCountry` stay derived from that client.address-carrying
+ * row directly (unchanged). `topRoutes`/`errorCount` are trace-level joins: on
+ * Vercel, `client.address`/`geo.*` commonly land on a root layout render span
+ * that never carries `http.route`, while the sibling request span in the SAME
+ * trace_id carries the route/status. So for each ip we collect every trace_id it
+ * touched (via a span), then pull route/status from any INBOUND span in those
+ * traces — not just the row that happened to carry the ip. Logs keep the direct
+ * (non-joined) reading since a log's own ip+route already sit on the same row.
+ *
  * Error rule: for spans, same as `errorSummary()` (OTLP error status or HTTP >= 400,
  * excluding outbound spans — see `OUTBOUND_SPAN_SQL`) read from the promoted
  * `status_code`/`http_status_code` columns; for logs, `severity in ('ERROR',
@@ -420,7 +429,6 @@ export async function topSources(
         attributes ->> 'geo.country' as country,
         attributes ->> 'geo.city' as city,
         attributes ->> 'geo.region' as region,
-        attributes ->> 'http.route' as route,
         start_ts as ts,
         (status_code = 'error' or http_status_code >= 400) as is_error
       from spans
@@ -433,11 +441,53 @@ export async function topSources(
         attributes ->> 'geo.country' as country,
         attributes ->> 'geo.city' as city,
         attributes ->> 'geo.region' as region,
-        attributes ->> 'http.route' as route,
         ts,
         (severity in ('ERROR', 'FATAL')) as is_error
       from logs
       where project = $1 and ts >= $2 and attributes ->> 'client.address' is not null
+    )
+  `;
+
+  // Trace-level join, only needed for the topRoutes/errorCount query below.
+  const routeJoinCte = `
+    -- Every trace_id an ip's span was seen on (same filter as combined's spans
+    -- branch — outbound spans never establish attribution).
+    , ip_traces as (
+      select distinct attributes ->> 'client.address' as ip, trace_id
+      from spans
+      where project = $1 and start_ts >= $2
+        and attributes ->> 'client.address' is not null
+        and not ${OUTBOUND_SPAN_SQL}
+    )
+    -- Any INBOUND span carrying a route, anywhere in one of those traces — this
+    -- is what recovers the route when it lives on a sibling span, not the one
+    -- that carried the ip. "spans" is unaliased so OUTBOUND_SPAN_SQL/INBOUND_SPAN_SQL's
+    -- bare kind/attributes references stay unambiguous (ip_traces has neither).
+    , span_routes as (
+      select ip_traces.ip,
+        spans.attributes ->> 'http.route' as route,
+        (spans.status_code = 'error' or spans.http_status_code >= 400) as is_error
+      from ip_traces
+      join spans on spans.project = $1 and spans.trace_id = ip_traces.trace_id
+      where spans.start_ts >= $2
+        and ${INBOUND_SPAN_SQL}
+        and spans.attributes ->> 'http.route' is not null
+    )
+    -- Log-side: ip + route already sit on the same log row (e.g. a 429/401 log)
+    -- so no trace hop is needed here.
+    , log_routes as (
+      select attributes ->> 'client.address' as ip,
+        attributes ->> 'http.route' as route,
+        (severity in ('ERROR', 'FATAL')) as is_error
+      from logs
+      where project = $1 and ts >= $2
+        and attributes ->> 'client.address' is not null
+        and attributes ->> 'http.route' is not null
+    )
+    , route_hits as (
+      select ip, route, is_error from span_routes
+      union all
+      select ip, route, is_error from log_routes
     )
   `;
 
@@ -451,10 +501,15 @@ export async function topSources(
       region: string | null;
       top_routes: TopSourceRoute[];
     }>(
-      `${combinedCte},
+      `${combinedCte}${routeJoinCte},
        agg as (
-         select ip, count(*) as total, count(*) filter (where is_error) as errors
+         select ip, count(*) as total
          from combined
+         group by ip
+       ),
+       error_agg as (
+         select ip, count(*) filter (where is_error) as errors
+         from route_hits
          group by ip
        ),
        -- geo for an IP can drift (VPN/mobile carrier reassignment); take the most
@@ -467,23 +522,24 @@ export async function topSources(
        ranked_routes as (
          select ip, route, count(*) as cnt,
            row_number() over (partition by ip order by count(*) desc, route asc) as rn
-         from combined
+         from route_hits
          where route is not null
          group by ip, route
        ),
        routes as (
          select ip, route, cnt from ranked_routes where rn <= 5
        )
-       select a.ip, a.total, a.errors, g.country, g.city, g.region,
+       select a.ip, a.total, coalesce(e.errors, 0) as errors, g.country, g.city, g.region,
          coalesce(
            json_agg(json_build_object('route', r.route, 'count', r.cnt) order by r.cnt desc, r.route asc)
              filter (where r.route is not null),
            '[]'
          ) as top_routes
        from agg a
+       left join error_agg e on e.ip = a.ip
        left join latest_geo g on g.ip = a.ip
        left join routes r on r.ip = a.ip
-       group by a.ip, a.total, a.errors, g.country, g.city, g.region
+       group by a.ip, a.total, e.errors, g.country, g.city, g.region
        order by a.total desc, a.ip asc
        limit $3`,
       [params.project, since, limit],
@@ -528,6 +584,9 @@ export interface RecentTrace {
   route: string | null;
   httpStatusCode: number | null;
   clientAddress: string | null;
+  country: string | null;
+  city: string | null;
+  region: string | null;
   startTs: Date;
 }
 
@@ -538,12 +597,19 @@ export interface ListTracesResult {
 }
 
 /**
- * Browsing entry point for when you don't have a traceId yet: the most recent
- * inbound request spans for a project (server-kind, or carrying route-ish
- * attributes — see `INBOUND_SPAN_SQL`/`isInboundSpan`), newest first. Excludes
- * outbound spans (this service's own fetch/db calls) the same way
- * `errorSummary`/`topSources` do. Feed a `traceId` from here into `query_traces`
- * to pull the full span tree for one request.
+ * Browsing entry point for when you don't have a traceId yet: one row per
+ * trace_id (deduped), newest first. The representative row is the earliest
+ * inbound request span in that trace (server-kind, or carrying route-ish
+ * attributes — see `INBOUND_SPAN_SQL`/`isInboundSpan`) for its name/route/status.
+ * `clientAddress`/geo are backfilled from ANY span in the same trace — on
+ * Vercel these commonly land on a sibling (often the root layout render) span
+ * rather than the request span itself, so reading only the representative row
+ * would leave them null even though the trace has them. Prefers the earliest
+ * span that actually carries a `client.address`; a trace with none still lists,
+ * with `clientAddress: null`. Excludes outbound spans (this service's own
+ * fetch/db calls) from the representative pick, same as `errorSummary`/
+ * `topSources`. Feed a `traceId` from here into `query_traces` for the full
+ * span tree of one request.
  */
 export async function listTraces(
   pool: Pool,
@@ -559,17 +625,50 @@ export async function listTraces(
     route: string | null;
     http_status_code: number | null;
     client_address: string | null;
+    country: string | null;
+    city: string | null;
+    region: string | null;
   }>(
-    `select
-       trace_id, span_id, name, start_ts, http_status_code,
-       attributes ->> 'http.route' as route,
-       attributes ->> 'client.address' as client_address
-     from spans
-     where project = $1 and start_ts >= $2
-       and not ${OUTBOUND_SPAN_SQL}
-       and ${INBOUND_SPAN_SQL}
-     order by start_ts desc
-     limit $3`,
+    `with in_window as (
+       select trace_id, span_id, name, start_ts, http_status_code,
+         attributes ->> 'http.route' as route
+       from spans
+       where project = $1 and start_ts >= $2
+         and not ${OUTBOUND_SPAN_SQL}
+         and ${INBOUND_SPAN_SQL}
+     ),
+     -- One representative span per trace: the earliest inbound span in it.
+     representative as (
+       select distinct on (trace_id) trace_id, span_id, name, start_ts, http_status_code, route
+       from in_window
+       order by trace_id, start_ts asc
+     ),
+     top_traces as (
+       select * from representative order by start_ts desc limit $3
+     ),
+     -- Backfill client.address/geo.* from any span in the same trace, preferring
+     -- the earliest span that actually carries a client.address (falls back to
+     -- null if none of the trace's spans do).
+     attribution as (
+       select distinct on (spans.trace_id)
+         spans.trace_id,
+         spans.attributes ->> 'client.address' as client_address,
+         spans.attributes ->> 'geo.country' as country,
+         spans.attributes ->> 'geo.city' as city,
+         spans.attributes ->> 'geo.region' as region
+       from top_traces
+       join spans on spans.project = $1 and spans.trace_id = top_traces.trace_id
+       order by spans.trace_id,
+         (case when spans.attributes ->> 'client.address' is not null then 0 else 1 end),
+         spans.start_ts asc
+     )
+     select
+       top_traces.trace_id, top_traces.span_id, top_traces.name, top_traces.start_ts,
+       top_traces.http_status_code, top_traces.route,
+       attribution.client_address, attribution.country, attribution.city, attribution.region
+     from top_traces
+     left join attribution on attribution.trace_id = top_traces.trace_id
+     order by top_traces.start_ts desc`,
     [params.project, since, limit],
   );
   return {
@@ -582,6 +681,9 @@ export async function listTraces(
       route: r.route,
       httpStatusCode: r.http_status_code,
       clientAddress: r.client_address,
+      country: r.country,
+      city: r.city,
+      region: r.region,
       startTs: r.start_ts,
     })),
   };
