@@ -7,11 +7,13 @@
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test"
   },
   "dependencies": {
     "@sensorium/core": "workspace:*",
-    "@sensorium/db": "workspace:*"
+    "@sensorium/db": "workspace:*",
+    "protobufjs": "^8.6.6"
   },
   "devDependencies": {
     "@sensorium/typescript-config": "workspace:*",

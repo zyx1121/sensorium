@@ -40,8 +40,23 @@ export interface SpanRow {
   endTs: Date;
   durationMs: number;
   statusCode: string | null;
+  /** `http.response.status_code` (current semconv) or `http.status_code` (legacy),
+   * whichever the span carries — extracted from `attributes` into its own column so
+   * `error_summary` can query it without unpacking JSONB. Null if the span has neither. */
+  httpStatusCode: number | null;
   resource: Record<string, unknown>;
   attributes: Record<string, unknown>;
+}
+
+/**
+ * `error_summary`'s `errorSpanCount` rule: an explicit OTLP ERROR status counts, and
+ * so does any HTTP 4xx/5xx — attack visibility needs 401/429/404s to surface, not
+ * just spans a producer bothered to mark ERROR (many client libraries only set span
+ * status on 5xx, not on 4xx). Mirrored in packages/db's `errorSummary()` SQL
+ * predicate; keep both in sync if this rule changes.
+ */
+export function isErrorSpan(span: Pick<SpanRow, "statusCode" | "httpStatusCode">): boolean {
+  return span.statusCode === "error" || (span.httpStatusCode !== null && span.httpStatusCode >= 400);
 }
 
 export type MetricKind = "gauge" | "sum" | "histogram";

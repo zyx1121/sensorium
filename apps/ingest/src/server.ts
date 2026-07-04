@@ -8,6 +8,10 @@ import {
 } from "@sensorium/core";
 import { insertLogs, insertMetricPoints, insertSpans, touchProjectLastSeen, type Pool } from "@sensorium/db";
 import { authenticateIngest } from "./auth.js";
+import { decodeLogsRequestProtobuf, decodeMetricsRequestProtobuf, decodeTraceRequestProtobuf } from "./otlp-protobuf.js";
+
+const JSON_CONTENT_TYPE = "application/json";
+const PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -18,26 +22,33 @@ function json(body: unknown, status = 200): Response {
 
 /** Builds the OTLP/HTTP receiver as a Web Standard fetch handler (works with Bun.serve directly). */
 export function createIngestApp(pool: Pool) {
-  async function withAuth(req: Request, handle: (project: string) => Promise<Response>): Promise<Response> {
-    // v0: only OTLP/JSON is accepted. Protobuf (application/x-protobuf) is the
-    // more common wire format in production OTel setups, but the collector
-    // in front of us can be configured to export JSON — deferred until a real
-    // producer needs binary framing.
-    const contentType = req.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) {
+  async function withAuth(
+    req: Request,
+    handle: (project: string, contentType: string) => Promise<Response>,
+  ): Promise<Response> {
+    // Content-Type dictates the wire format; anything else (including missing) is
+    // rejected outright rather than guessed — silently trying to protobuf-decode an
+    // unrecognized body risks parsing garbage into rows without ever throwing.
+    const contentType = (req.headers.get("content-type") ?? "").split(";")[0]!.trim();
+    if (contentType !== JSON_CONTENT_TYPE && contentType !== PROTOBUF_CONTENT_TYPE) {
       return json(
-        { error: "unsupported content-type, expected application/json (OTLP/JSON); protobuf not yet supported" },
+        {
+          error: `unsupported content-type "${contentType || "(missing)"}"; expected ${JSON_CONTENT_TYPE} or ${PROTOBUF_CONTENT_TYPE}`,
+        },
         415,
       );
     }
 
+    // Token → project binding applies identically regardless of wire format — the
+    // content-type branch above only decides how the body is parsed, never who it's
+    // attributed to.
     const project = await authenticateIngest(pool, req);
     if (!project) {
       return json({ error: "unauthorized" }, 401);
     }
 
     try {
-      const response = await handle(project);
+      const response = await handle(project, contentType);
       await touchProjectLastSeen(pool, project);
       return response;
     } catch (err) {
@@ -54,8 +65,11 @@ export function createIngestApp(pool: Pool) {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/logs") {
-      return withAuth(req, async (project) => {
-        const payload = (await req.json()) as OtlpLogsPayload;
+      return withAuth(req, async (project, contentType) => {
+        const payload: OtlpLogsPayload =
+          contentType === PROTOBUF_CONTENT_TYPE
+            ? decodeLogsRequestProtobuf(new Uint8Array(await req.arrayBuffer()))
+            : ((await req.json()) as OtlpLogsPayload);
         const rows = mapOtlpLogsToRows(project, payload);
         const inserted = await insertLogs(pool, rows);
         return json({ ok: true, inserted });
@@ -63,8 +77,11 @@ export function createIngestApp(pool: Pool) {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/traces") {
-      return withAuth(req, async (project) => {
-        const payload = (await req.json()) as OtlpTracesPayload;
+      return withAuth(req, async (project, contentType) => {
+        const payload: OtlpTracesPayload =
+          contentType === PROTOBUF_CONTENT_TYPE
+            ? decodeTraceRequestProtobuf(new Uint8Array(await req.arrayBuffer()))
+            : ((await req.json()) as OtlpTracesPayload);
         const rows = mapOtlpTracesToRows(project, payload);
         const inserted = await insertSpans(pool, rows);
         return json({ ok: true, inserted });
@@ -72,8 +89,11 @@ export function createIngestApp(pool: Pool) {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/metrics") {
-      return withAuth(req, async (project) => {
-        const payload = (await req.json()) as OtlpMetricsPayload;
+      return withAuth(req, async (project, contentType) => {
+        const payload: OtlpMetricsPayload =
+          contentType === PROTOBUF_CONTENT_TYPE
+            ? decodeMetricsRequestProtobuf(new Uint8Array(await req.arrayBuffer()))
+            : ((await req.json()) as OtlpMetricsPayload);
         const rows = mapOtlpMetricsToRows(project, payload);
         const inserted = await insertMetricPoints(pool, rows);
         return json({ ok: true, inserted });

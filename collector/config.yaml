@@ -3,8 +3,10 @@
 # A producer sends OTLP to this Collector; the Collector re-exports OTLP/HTTP
 # JSON to sensorium's apps/ingest with the project's bearer token attached.
 # This is the recommended path (batching, retry, protocol translation from
-# whatever the producer's SDK emits — including OTLP/gRPC or protobuf, which
-# apps/ingest itself does not accept in v0).
+# whatever the producer's SDK emits — including OTLP/gRPC, which apps/ingest
+# itself does not accept; apps/ingest does accept OTLP/HTTP protobuf directly,
+# see collector/README.md Mode 2, so this config's `encoding: json` below is a
+# choice, not a requirement).
 #
 # Run: otelcol --config collector/config.yaml
 # (binary: https://opentelemetry.io/docs/collector/installation/)

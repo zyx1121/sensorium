@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildSpanTree,
+  isErrorSpan,
   mapOtlpLogsToRows,
   mapOtlpMetricsToRows,
   mapOtlpTracesToRows,
@@ -142,12 +143,42 @@ describe("mapOtlpTracesToRows", () => {
     expect(root.durationMs).toBe(50);
     expect(root.parentSpanId).toBeNull();
     expect(root.attributes["http.status_code"]).toBe(200);
+    expect(root.httpStatusCode).toBe(200);
 
     const child = rows.find((r) => r.spanId === "6df206e2fd0dd4e5")!;
     expect(child.kind).toBe("client");
     expect(child.statusCode).toBe("error");
     expect(child.parentSpanId).toBe("051581bf3cb55c13");
     expect(child.durationMs).toBe(20);
+    expect(child.httpStatusCode).toBeNull();
+  });
+
+  test("httpStatusCode prefers the current semconv attribute over the legacy one", () => {
+    const payload: OtlpTracesPayload = {
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "5b8aa5a2d2c872e8321cf37308d69df2",
+                  spanId: "aaaaaaaaaaaaaaaa",
+                  name: "GET /missing",
+                  startTimeUnixNano: "1712345678000000000",
+                  endTimeUnixNano: "1712345678010000000",
+                  attributes: [
+                    { key: "http.response.status_code", value: { intValue: "404" } },
+                    { key: "http.status_code", value: { intValue: "999" } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const rows = mapOtlpTracesToRows("ai-winlab", payload);
+    expect(rows[0]!.httpStatusCode).toBe(404);
   });
 
   test("buildSpanTree nests the child span under its parent", () => {
@@ -176,5 +207,23 @@ describe("mapOtlpMetricsToRows", () => {
     const histogram = rows.find((r) => r.metricName === "http.server.duration")!;
     expect(histogram.kind).toBe("histogram");
     expect(histogram.value).toBe(123.4);
+  });
+});
+
+describe("isErrorSpan", () => {
+  test("OTLP status ERROR counts, regardless of HTTP status", () => {
+    expect(isErrorSpan({ statusCode: "error", httpStatusCode: null })).toBe(true);
+    expect(isErrorSpan({ statusCode: "error", httpStatusCode: 200 })).toBe(true);
+  });
+
+  test("HTTP >= 400 counts even without an explicit OTLP error status (401/429/404 visibility)", () => {
+    expect(isErrorSpan({ statusCode: null, httpStatusCode: 404 })).toBe(true);
+    expect(isErrorSpan({ statusCode: "unset", httpStatusCode: 401 })).toBe(true);
+    expect(isErrorSpan({ statusCode: "ok", httpStatusCode: 429 })).toBe(true);
+  });
+
+  test("HTTP 200 and no OTLP error status does not count", () => {
+    expect(isErrorSpan({ statusCode: "ok", httpStatusCode: 200 })).toBe(false);
+    expect(isErrorSpan({ statusCode: "unset", httpStatusCode: null })).toBe(false);
   });
 });

@@ -48,6 +48,20 @@ export function declaredNamespace(resource: OtlpResource | undefined): string | 
 }
 
 /**
+ * Reads the span's HTTP response status code, preferring the current stable semconv
+ * name over the legacy one a lot of instrumentation still emits.
+ */
+export function httpStatusCodeFromAttributes(attributes: Record<string, unknown>): number | null {
+  const raw = attributes["http.response.status_code"] ?? attributes["http.status_code"];
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === "string") {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/**
  * Maps an OTLP/JSON ExportLogsServiceRequest to our log rows.
  * `project` is caller-supplied (resolved from the ingest bearer token), NOT
  * read from resource attributes — token binding wins over client claims.
@@ -85,6 +99,7 @@ export function mapOtlpTracesToRows(project: string, payload: OtlpTracesPayload)
       for (const span of ss.spans ?? []) {
         const startTs = nanosToDate(span.startTimeUnixNano);
         const endTs = nanosToDate(span.endTimeUnixNano);
+        const attributes = keyValuesToObject(span.attributes);
         rows.push({
           project,
           traceId: span.traceId,
@@ -96,8 +111,9 @@ export function mapOtlpTracesToRows(project: string, payload: OtlpTracesPayload)
           endTs,
           durationMs: Math.max(0, endTs.getTime() - startTs.getTime()),
           statusCode: statusCodeFromProto(span.status?.code),
+          httpStatusCode: httpStatusCodeFromAttributes(attributes),
           resource,
-          attributes: keyValuesToObject(span.attributes),
+          attributes,
         });
       }
     }
