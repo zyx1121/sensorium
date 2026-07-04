@@ -106,6 +106,7 @@ export async function insertSpans(pool: Pool, rows: SpanRow[]): Promise<number> 
     "end_ts",
     "duration_ms",
     "status_code",
+    "http_status_code",
     "resource",
     "attributes",
   ];
@@ -125,6 +126,7 @@ export async function insertSpans(pool: Pool, rows: SpanRow[]): Promise<number> 
       row.endTs,
       row.durationMs,
       row.statusCode,
+      row.httpStatusCode,
       JSON.stringify(row.resource),
       JSON.stringify(row.attributes),
     );
@@ -139,6 +141,7 @@ export async function insertSpans(pool: Pool, rows: SpanRow[]): Promise<number> 
        end_ts = excluded.end_ts,
        duration_ms = excluded.duration_ms,
        status_code = excluded.status_code,
+       http_status_code = excluded.http_status_code,
        resource = excluded.resource,
        attributes = excluded.attributes`,
     values,
@@ -205,6 +208,7 @@ interface SpanDbRow {
   end_ts: Date;
   duration_ms: number;
   status_code: string | null;
+  http_status_code: number | null;
   resource: Record<string, unknown> | null;
   attributes: Record<string, unknown> | null;
 }
@@ -221,6 +225,7 @@ function rowToSpanRow(row: SpanDbRow): SpanRow {
     endTs: row.end_ts,
     durationMs: row.duration_ms,
     statusCode: row.status_code,
+    httpStatusCode: row.http_status_code,
     resource: row.resource ?? {},
     attributes: row.attributes ?? {},
   };
@@ -228,7 +233,7 @@ function rowToSpanRow(row: SpanDbRow): SpanRow {
 
 const LOG_COLUMNS = "project, ts, severity, body, trace_id, span_id, resource, attributes";
 const SPAN_COLUMNS =
-  "project, trace_id, span_id, parent_span_id, name, kind, start_ts, end_ts, duration_ms, status_code, resource, attributes";
+  "project, trace_id, span_id, parent_span_id, name, kind, start_ts, end_ts, duration_ms, status_code, http_status_code, resource, attributes";
 
 export interface QueryLogsParams {
   project: string;
@@ -297,8 +302,13 @@ export async function errorSummary(
       "select count(*) from logs where project = $1 and ts >= $2 and severity in ('ERROR', 'FATAL')",
       [params.project, since],
     ),
+    // Mirrors packages/core's isErrorSpan(): an explicit OTLP ERROR status counts,
+    // and so does any HTTP 4xx/5xx (401/429/404s need to show up for attack
+    // visibility, not just spans a producer bothered to mark ERROR).
     pool.query<{ count: string }>(
-      "select count(*) from spans where project = $1 and start_ts >= $2 and status_code = 'error'",
+      `select count(*) from spans
+       where project = $1 and start_ts >= $2
+       and (status_code = 'error' or http_status_code >= 400)`,
       [params.project, since],
     ),
     pool.query<{ body: string; count: string }>(
