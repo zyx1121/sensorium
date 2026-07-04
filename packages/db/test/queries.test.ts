@@ -482,3 +482,150 @@ describe.skipIf(!DATABASE_URL)(
     });
   },
 );
+
+describe.skipIf(!DATABASE_URL)(
+  "route from span name when http.route is null — Vercel shape (integration, requires DATABASE_URL)",
+  () => {
+    let pool: Pool;
+    let now: number;
+    const project = `test-routename-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+    function span(
+      overrides: Partial<SpanRow> & Pick<SpanRow, "attributes" | "traceId" | "spanId" | "startTs" | "endTs">,
+    ): SpanRow {
+      return {
+        project,
+        parentSpanId: null,
+        name: "span",
+        kind: "internal",
+        durationMs: 5,
+        statusCode: "ok",
+        httpStatusCode: 200,
+        resource: {},
+        ...overrides,
+      };
+    }
+
+    beforeAll(async () => {
+      pool = new Pool({ connectionString: DATABASE_URL });
+      await runMigrations(pool);
+      await createProject(pool, project, `token-${project}`);
+
+      now = Date.now();
+
+      await insertSpans(pool, [
+        // Trace A — client.address on a sibling layout span (no http.route ever
+        // set anywhere in this trace); the inbound request span is SERVER-kind
+        // (Vercel's real shape) and only carries a name like "GET /profile/[id]/page" —
+        // no http.route attribute at all. Route must be parsed from the name.
+        span({
+          traceId: "trace-name-a",
+          spanId: "span-a-layout",
+          name: "root layout",
+          startTs: new Date(now - 5 * 60_000),
+          endTs: new Date(now - 5 * 60_000 + 10),
+          attributes: {
+            "client.address": "140.113.194.1",
+            "geo.country": "TW",
+            "geo.city": "Taipei",
+            "geo.region": "Taipei City",
+          },
+        }),
+        span({
+          traceId: "trace-name-a",
+          spanId: "span-a-request",
+          name: "GET /profile/[id]/page",
+          kind: "server",
+          startTs: new Date(now - 5 * 60_000 + 1),
+          endTs: new Date(now - 5 * 60_000 + 11),
+          statusCode: "ok",
+          httpStatusCode: 200,
+          attributes: {},
+        }),
+        // Trace B — same ip, a request span that HAS http.route set as well as a
+        // method-prefixed name; http.route must win (non-Vercel producer compat).
+        span({
+          traceId: "trace-name-b",
+          spanId: "span-b-layout",
+          name: "root layout",
+          startTs: new Date(now - 4 * 60_000),
+          endTs: new Date(now - 4 * 60_000 + 10),
+          attributes: {
+            "client.address": "140.113.194.1",
+            "geo.country": "TW",
+          },
+        }),
+        span({
+          traceId: "trace-name-b",
+          spanId: "span-b-request",
+          name: "POST /api/orders",
+          kind: "server",
+          startTs: new Date(now - 4 * 60_000 + 1),
+          endTs: new Date(now - 4 * 60_000 + 11),
+          statusCode: "ok",
+          httpStatusCode: 200,
+          attributes: { "http.route": "/api/orders/[id]" },
+        }),
+        // Trace C — same ip; the ONLY inbound-adjacent span in the trace is an
+        // outbound fetch to Supabase whose name also happens to start with a
+        // method token ("GET "). It must never contribute a route: it's outbound
+        // (kind = client, http.client.name = fetch), so the not OUTBOUND_SPAN_SQL
+        // gate drops it before the name is ever parsed.
+        span({
+          traceId: "trace-name-c",
+          spanId: "span-c-layout",
+          name: "root layout",
+          startTs: new Date(now - 3 * 60_000),
+          endTs: new Date(now - 3 * 60_000 + 10),
+          attributes: {
+            "client.address": "140.113.194.1",
+            "geo.country": "TW",
+          },
+        }),
+        span({
+          traceId: "trace-name-c",
+          spanId: "span-c-fetch",
+          name: "GET https://xyz.supabase.co/rest/v1/orders",
+          kind: "client",
+          startTs: new Date(now - 3 * 60_000 + 1),
+          endTs: new Date(now - 3 * 60_000 + 11),
+          statusCode: "ok",
+          httpStatusCode: 200,
+          attributes: { "http.client.name": "fetch", "operation.name": "fetch.GET" },
+        }),
+      ]);
+    });
+
+    afterAll(async () => {
+      await pool.query("delete from spans where project = $1", [project]);
+      await pool.query("delete from projects where name = $1", [project]);
+      await pool.end();
+    });
+
+    test("topSources parses the route out of the span name when http.route is null", async () => {
+      const result = await topSources(pool, { project, windowMinutes: 60 });
+      const ip = result.sources.find((s) => s.ip === "140.113.194.1")!;
+      expect(ip.topRoutes).toEqual([
+        { route: "/api/orders/[id]", count: 1 }, // http.route wins over the "POST /api/orders" name
+        { route: "/profile/[id]/page", count: 1 }, // parsed from "GET /profile/[id]/page"
+      ]);
+      // trace-name-c's outbound fetch span must never surface as a route.
+      expect(ip.topRoutes.map((r) => r.route)).not.toContain("https://xyz.supabase.co/rest/v1/orders");
+      expect(ip.topRoutes.map((r) => r.route)).not.toContain("GET https://xyz.supabase.co/rest/v1/orders");
+    });
+
+    test("listTraces also fills route from the span name when http.route is null", async () => {
+      const result = await listTraces(pool, { project, windowMinutes: 60 });
+      const traceA = result.traces.find((t) => t.traceId === "trace-name-a")!;
+      expect(traceA.name).toBe("GET /profile/[id]/page");
+      expect(traceA.route).toBe("/profile/[id]/page");
+
+      const traceB = result.traces.find((t) => t.traceId === "trace-name-b")!;
+      expect(traceB.route).toBe("/api/orders/[id]");
+
+      // trace-name-c has no inbound span at all (only the outbound fetch) — it
+      // must not appear in list_traces.
+      expect(result.traces.some((t) => t.traceId === "trace-name-c")).toBe(false);
+    });
+  },
+);
