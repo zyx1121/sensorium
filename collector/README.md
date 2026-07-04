@@ -21,18 +21,23 @@ otelcol --config collector/config.yaml
 
 ## Mode 2: direct ingest
 
-Producer's SDK is configured to export OTLP/HTTP with JSON encoding straight
-to `apps/ingest` (`https://sensorium.zyx.tw/v1/{logs,traces,metrics}`), with
-`Authorization: Bearer <project-token>` set on the exporter itself.
+Producer's SDK is configured to export OTLP/HTTP straight to `apps/ingest`
+(`https://sensorium.zyx.tw/v1/{logs,traces,metrics}`), with `Authorization:
+Bearer <project-token>` set on the exporter itself. Both encodings work:
+
+- JSON — `Content-Type: application/json` (e.g.
+  `@opentelemetry/exporter-*-otlp-http` with `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`)
+- protobuf — `Content-Type: application/x-protobuf`, the default for most OTel
+  SDKs' HTTP exporters (e.g. `@opentelemetry/exporter-*-otlp-proto`,
+  `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`)
 
 Use this when: the producer is a small service and running/operating a
-Collector sidecar isn't worth it. Most OTel SDKs support JSON encoding
-directly (e.g. `@opentelemetry/exporter-*-otlp-http` with
-`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`).
+Collector sidecar isn't worth it.
 
 ## What v0 does not support
 
-`apps/ingest` only accepts `Content-Type: application/json` (OTLP/JSON).
-Protobuf (`application/x-protobuf`) is rejected with 415 — if a producer only
-speaks protobuf, put a Collector in front (Mode 1); the Collector's
-`otlphttp` exporter can re-encode to JSON regardless of what it received.
+`apps/ingest` only accepts `Content-Type: application/json` or
+`application/x-protobuf`; anything else (including OTLP/**gRPC**, a different
+wire protocol entirely) is rejected with 415 — put a Collector in front
+(Mode 1) for gRPC producers, since the Collector always speaks gRPC/HTTP on
+its receiver side regardless of what it forwards.

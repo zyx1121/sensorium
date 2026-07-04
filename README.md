@@ -34,7 +34,7 @@ shared bearer token (one trusted consumer); reads are cross-project.
 ## Workspace layout
 
 ```
-apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON only in v0.
+apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON or OTLP/protobuf.
 apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, error_summary, search.
 packages/core/   Signal model + OTLP/JSON → row mapping (pure, unit tested) + span-tree builder.
 packages/db/     SQL migrations, migration runner, query helpers shared by ingest/mcp.
@@ -76,7 +76,9 @@ bun run lint         # eslint . (flat config, shared @sensorium/eslint-config)
 
 ## v0 scope / known gaps
 
-- Ingest only accepts OTLP/**JSON**, not protobuf — see `collector/README.md`.
+- Ingest accepts OTLP/**JSON** and OTLP/**protobuf** (`Content-Type:
+  application/json` or `application/x-protobuf`); anything else gets a 415.
+  See `collector/README.md`.
 - Histogram metric points store the aggregate `sum` as `value`, not
   per-bucket data — fine for "is this moving", not for percentiles.
 - No rate limiting / payload size caps on `apps/ingest` yet.
