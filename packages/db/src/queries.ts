@@ -722,6 +722,118 @@ export async function listTraces(
   };
 }
 
+export interface MetricWindowParams {
+  project: string;
+  since: Date;
+  until?: Date;
+}
+
+export interface MetricCatalogEntry {
+  metricName: string;
+  kind: MetricPointRow["kind"];
+  pointCount: number;
+  firstTs: Date;
+  lastTs: Date;
+  lastValue: number;
+}
+
+/** One row per metric the project reported in the window, with its latest point. */
+export async function listMetricNames(pool: Pool, params: MetricWindowParams): Promise<MetricCatalogEntry[]> {
+  const conditions = ["project = $1", "ts >= $2"];
+  const values: unknown[] = [params.project, params.since];
+  if (params.until) {
+    values.push(params.until);
+    conditions.push(`ts <= $${values.length}`);
+  }
+  const { rows } = await pool.query<{
+    metric_name: string;
+    kind: MetricPointRow["kind"];
+    point_count: string;
+    first_ts: Date;
+    last_ts: Date;
+    last_value: number;
+  }>(
+    `select distinct on (metric_name)
+       metric_name, kind, ts as last_ts, value as last_value,
+       count(*) over (partition by metric_name) as point_count,
+       min(ts) over (partition by metric_name) as first_ts
+     from metric_points
+     where ${conditions.join(" and ")}
+     order by metric_name asc, ts desc`,
+    values,
+  );
+  return rows.map((r) => ({
+    metricName: r.metric_name,
+    kind: r.kind,
+    pointCount: Number(r.point_count),
+    firstTs: r.first_ts,
+    lastTs: r.last_ts,
+    lastValue: r.last_value,
+  }));
+}
+
+export interface QueryMetricsParams extends MetricWindowParams {
+  metricName: string;
+  limit?: number;
+}
+
+export interface MetricPoint {
+  ts: Date;
+  kind: MetricPointRow["kind"];
+  value: number;
+  attributes: Record<string, unknown>;
+}
+
+export interface MetricSeriesResult {
+  project: string;
+  metricName: string;
+  /** Whole-window stats — independent of `limit`, which only pages `points`. */
+  summary: { count: number; min: number | null; max: number | null; avg: number | null };
+  /** Newest first, so points[0] is the latest reading in the window. */
+  points: MetricPoint[];
+}
+
+/**
+ * Raw points + whole-window stats for one metric. A metric with several series
+ * (e.g. hostmetrics' per-cpu/per-state points) interleaves them here — the
+ * distinguishing labels stay in each point's `attributes`, so callers that need
+ * per-series numbers group client-side. The summary collapses across all series.
+ */
+export async function queryMetrics(pool: Pool, params: QueryMetricsParams): Promise<MetricSeriesResult> {
+  const conditions = ["project = $1", "metric_name = $2", "ts >= $3"];
+  const values: unknown[] = [params.project, params.metricName, params.since];
+  if (params.until) {
+    values.push(params.until);
+    conditions.push(`ts <= $${values.length}`);
+  }
+  const where = conditions.join(" and ");
+  const limit = Math.min(params.limit ?? 100, 1000);
+  const [summaryRes, pointsRes] = await Promise.all([
+    pool.query<{ count: string; min: number | null; max: number | null; avg: number | null }>(
+      `select count(*) as count, min(value) as min, max(value) as max, avg(value) as avg
+       from metric_points where ${where}`,
+      values,
+    ),
+    pool.query<{ ts: Date; kind: MetricPointRow["kind"]; value: number; attributes: Record<string, unknown> | null }>(
+      `select ts, kind, value, attributes from metric_points
+       where ${where} order by ts desc limit $${values.length + 1}`,
+      [...values, limit],
+    ),
+  ]);
+  const summary = summaryRes.rows[0]!;
+  return {
+    project: params.project,
+    metricName: params.metricName,
+    summary: {
+      count: Number(summary.count),
+      min: summary.min,
+      max: summary.max,
+      avg: summary.avg,
+    },
+    points: pointsRes.rows.map((r) => ({ ts: r.ts, kind: r.kind, value: r.value, attributes: r.attributes ?? {} })),
+  };
+}
+
 export async function searchLogs(
   pool: Pool,
   params: { project: string; q: string; since: Date; limit?: number },
