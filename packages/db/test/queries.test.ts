@@ -1,14 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { SpanRow } from "@sensorium/core";
+import type { MetricPointRow, SpanRow } from "@sensorium/core";
 import { Pool } from "pg";
 import { runMigrations } from "../src/migrate.js";
 import {
   createProject,
   errorSummary,
   insertLogs,
+  insertMetricPoints,
   insertSpans,
+  listMetricNames,
   listTraces,
   queryLogs,
+  queryMetrics,
   topSources,
 } from "../src/queries.js";
 
@@ -629,3 +632,142 @@ describe.skipIf(!DATABASE_URL)(
     });
   },
 );
+
+describe.skipIf(!DATABASE_URL)("query_metrics + listMetricNames (integration, requires DATABASE_URL)", () => {
+  let pool: Pool;
+  let now: number;
+  const project = `test-metrics-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const otherProject = `${project}-other`;
+
+  function point(overrides: Partial<MetricPointRow> & Pick<MetricPointRow, "metricName" | "ts" | "value">): MetricPointRow {
+    return {
+      project,
+      kind: "gauge",
+      attributes: {},
+      resource: {},
+      ...overrides,
+    };
+  }
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: DATABASE_URL });
+    await runMigrations(pool);
+    await createProject(pool, project, `token-${project}`);
+    await createProject(pool, otherProject, `token-${otherProject}`);
+
+    now = Date.now();
+
+    // hostmetrics-shaped fixture: one gauge with two interleaved series
+    // (attributes distinguish them), one sum, and a same-named metric in a
+    // DIFFERENT project that must never leak across.
+    await insertMetricPoints(pool, [
+      point({
+        metricName: "system.cpu.utilization",
+        ts: new Date(now - 5 * 60_000),
+        value: 0.2,
+        attributes: { state: "user" },
+      }),
+      point({
+        metricName: "system.cpu.utilization",
+        ts: new Date(now - 3 * 60_000),
+        value: 0.8,
+        attributes: { state: "system" },
+      }),
+      point({
+        metricName: "system.cpu.utilization",
+        ts: new Date(now - 1 * 60_000),
+        value: 0.5,
+        attributes: { state: "user" },
+      }),
+      point({
+        metricName: "system.memory.usage",
+        ts: new Date(now - 2 * 60_000),
+        value: 4096,
+        kind: "sum",
+      }),
+      point({
+        project: otherProject,
+        metricName: "system.cpu.utilization",
+        ts: new Date(now - 1 * 60_000),
+        value: 0.99,
+      }),
+    ]);
+  });
+
+  afterAll(async () => {
+    await pool.query("delete from metric_points where project in ($1, $2)", [project, otherProject]);
+    await pool.query("delete from projects where name in ($1, $2)", [project, otherProject]);
+    await pool.end();
+  });
+
+  test("listMetricNames catalogs each metric once with counts and the latest point, scoped to the project", async () => {
+    const catalog = await listMetricNames(pool, { project, since: new Date(now - 60 * 60_000) });
+    expect(catalog).toHaveLength(2); // otherProject's rows must not inflate this
+    expect(catalog.map((m) => m.metricName)).toEqual(["system.cpu.utilization", "system.memory.usage"]);
+
+    const cpu = catalog[0]!;
+    expect(cpu.kind).toBe("gauge");
+    expect(cpu.pointCount).toBe(3);
+    expect(cpu.lastValue).toBe(0.5); // the -1m point, not otherProject's 0.99
+    expect(cpu.firstTs.getTime()).toBe(now - 5 * 60_000);
+    expect(cpu.lastTs.getTime()).toBe(now - 1 * 60_000);
+
+    const mem = catalog[1]!;
+    expect(mem.kind).toBe("sum");
+    expect(mem.pointCount).toBe(1);
+    expect(mem.lastValue).toBe(4096);
+  });
+
+  test("queryMetrics returns whole-window summary plus newest-first points with attributes", async () => {
+    const result = await queryMetrics(pool, {
+      project,
+      metricName: "system.cpu.utilization",
+      since: new Date(now - 60 * 60_000),
+    });
+    expect(result.summary.count).toBe(3);
+    expect(result.summary.min).toBe(0.2);
+    expect(result.summary.max).toBe(0.8);
+    expect(result.summary.avg).toBeCloseTo(0.5);
+    expect(result.points.map((p) => p.value)).toEqual([0.5, 0.8, 0.2]); // newest first
+    expect(result.points[0]!.attributes).toEqual({ state: "user" });
+    expect(result.points[1]!.attributes).toEqual({ state: "system" });
+  });
+
+  test("limit pages points but the summary still covers the whole window", async () => {
+    const result = await queryMetrics(pool, {
+      project,
+      metricName: "system.cpu.utilization",
+      since: new Date(now - 60 * 60_000),
+      limit: 1,
+    });
+    expect(result.points).toHaveLength(1);
+    expect(result.points[0]!.value).toBe(0.5); // still the newest
+    expect(result.summary.count).toBe(3);
+  });
+
+  test("until bounds the window for both catalog and series", async () => {
+    const since = new Date(now - 60 * 60_000);
+    const until = new Date(now - 2 * 60_000); // cuts off the -1m cpu point
+
+    const catalog = await listMetricNames(pool, { project, since, until });
+    const cpu = catalog.find((m) => m.metricName === "system.cpu.utilization")!;
+    expect(cpu.pointCount).toBe(2);
+    expect(cpu.lastValue).toBe(0.8); // -3m point is now the latest in window
+
+    const result = await queryMetrics(pool, { project, metricName: "system.cpu.utilization", since, until });
+    expect(result.summary.count).toBe(2);
+    expect(result.summary.max).toBe(0.8);
+  });
+
+  test("an unknown metric returns an empty series, not an error", async () => {
+    const result = await queryMetrics(pool, {
+      project,
+      metricName: "no.such.metric",
+      since: new Date(now - 60 * 60_000),
+    });
+    expect(result.summary.count).toBe(0);
+    expect(result.summary.min).toBeNull();
+    expect(result.summary.avg).toBeNull();
+    expect(result.points).toEqual([]);
+  });
+});

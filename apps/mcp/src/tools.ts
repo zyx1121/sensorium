@@ -3,9 +3,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { buildSpanTree } from "@sensorium/core";
 import {
   errorSummary,
+  listMetricNames,
   listProjects,
   listTraces,
   queryLogs,
+  queryMetrics,
   queryTraceSpans,
   searchLogs,
   topSources,
@@ -138,6 +140,38 @@ export function registerTools(server: McpServer, pool: Pool): void {
       },
     },
     async ({ project, windowMinutes, limit }) => textResult(await topSources(pool, { project, windowMinutes, limit })),
+  );
+
+  server.registerTool(
+    "query_metrics",
+    {
+      title: "Query metrics",
+      description:
+        "Reads OTLP metrics for a project within a time window. Without metricName: catalogs every metric " +
+        "seen in the window (kind, point count, first/last seen, last value) — start here to discover what a " +
+        "producer reports. With metricName: whole-window min/max/avg/count plus raw points, newest first, up " +
+        "to limit (summary ignores limit). A metric with several series (e.g. hostmetrics' per-cpu/per-state " +
+        "points) interleaves them — the labels live in each point's attributes, so group client-side for " +
+        "per-series numbers. Histogram points carry ingest's v0 sum-only reduction.",
+      inputSchema: {
+        project: z.string(),
+        metricName: z.string().optional().describe("exact metric name; omit to list which metrics exist"),
+        since: z.string().datetime().describe("ISO 8601 timestamp, inclusive lower bound"),
+        until: z.string().datetime().optional(),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(1000)
+          .optional()
+          .describe("max points returned when metricName is set (default 100)"),
+      },
+    },
+    async ({ project, metricName, since, until, limit }) => {
+      const window = { project, since: new Date(since), until: until ? new Date(until) : undefined };
+      if (!metricName) return textResult(await listMetricNames(pool, window));
+      return textResult(await queryMetrics(pool, { ...window, metricName, limit }));
+    },
   );
 
   server.registerTool(
