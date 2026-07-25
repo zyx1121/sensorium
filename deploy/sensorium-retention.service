@@ -1,0 +1,10 @@
+[Unit]
+Description=sensorium retention (roll metric partitions forward, drop expired signals)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sensorium
+EnvironmentFile=/etc/sensorium/app.env
+ExecStart=/root/.bun/bin/bun run packages/db/src/cli.ts retention

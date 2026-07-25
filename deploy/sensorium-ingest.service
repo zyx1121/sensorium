@@ -1,0 +1,15 @@
+[Unit]
+Description=sensorium ingest (OTLP receiver)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sensorium/apps/ingest
+EnvironmentFile=/etc/sensorium/app.env
+ExecStart=/root/.bun/bin/bun run src/index.ts
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

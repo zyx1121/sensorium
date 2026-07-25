@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily sensorium retention sweep
+
+[Timer]
+# 03:20 UTC: after the day boundary the partitions are keyed on, and clear of
+# the apt/logrotate timers that cluster on the hour.
+OnCalendar=*-*-* 03:20:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
