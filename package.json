@@ -10,7 +10,8 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "db:migrate": "bun run packages/db/src/cli.ts migrate",
-    "db:register-project": "bun run packages/db/src/cli.ts register-project"
+    "db:register-project": "bun run packages/db/src/cli.ts register-project",
+    "db:retention": "bun run packages/db/src/cli.ts retention"
   },
   "devDependencies": {
     "@sensorium/eslint-config": "workspace:*",
