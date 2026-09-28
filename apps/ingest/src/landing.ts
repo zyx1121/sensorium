@@ -71,11 +71,11 @@ const PAGE: { title: string; tagline: string; sections: { heading: string; block
               code: "curl -fsSLO https://raw.githubusercontent.com/zyx1121/sensorium/main/compose.yaml\ncurl -fsSL -o .env https://raw.githubusercontent.com/zyx1121/sensorium/main/.env.example",
             },
             {
-              text: "Start it. Postgres, the receiver on port 8787, the MCP endpoint on port 8788 and a daily retention sweep come up from one image.",
+              text: "Start it. The receiver on port 8787, the MCP endpoint on port 8788 and a daily retention sweep come up from one image, beside Postgres.",
               code: "docker compose up -d",
             },
             {
-              text: "Put a reverse proxy with TLS in front. Both ports listen on 127.0.0.1, and tokens travel in the Authorization header.",
+              text: "Put a reverse proxy with TLS in front, and route `/mcp` to port 8788 and everything else to port 8787. Both ports listen on 127.0.0.1, and tokens travel in the Authorization header.",
             },
           ],
         },
@@ -107,7 +107,7 @@ const PAGE: { title: string; tagline: string; sections: { heading: string; block
       heading: "Configure",
       blocks: [
         {
-          p: "Every setting is an environment variable in `.env`. `POSTGRES_PASSWORD` and `SENSORIUM_MCP_TOKEN` are required, and the `SENSORIUM_RETENTION_*_DAYS` keys set how long data stays. The [README](https://github.com/zyx1121/sensorium#configure) lists every key.",
+          p: "Every setting is an environment variable in `.env`. `POSTGRES_PASSWORD` and `SENSORIUM_MCP_TOKEN` are required, and the `SENSORIUM_RETENTION_*_DAYS` keys set how long data stays. [.env.example](https://github.com/zyx1121/sensorium/blob/main/.env.example) documents every key.",
         },
       ],
     },

@@ -55,9 +55,10 @@ describe("landing page", () => {
     expect(page).toContain("<pre><code>docker compose up -d</code></pre>");
     // Links that leave zyx.tw open in a new tab with no referrer; zyx.tw's own do not.
     expect(page).toContain('<a class="link" href="https://github.com/zyx1121/sensorium" target="_blank" rel="noopener noreferrer">GitHub</a>');
-    expect(page).toContain('<a href="https://github.com/zyx1121/sensorium#configure" target="_blank" rel="noopener noreferrer">README</a>');
+    expect(page).toContain('<a href="https://github.com/zyx1121/sensorium/blob/main/.env.example" target="_blank" rel="noopener noreferrer">.env.example</a>');
+    expect(page).toContain("route <code>/mcp</code> to port 8788");
     expect(page).toContain('<a class="link" href="https://www.zyx.tw/privacy">Privacy</a>');
-    expect(md).toContain("[README](https://github.com/zyx1121/sensorium#configure)");
+    expect(md).toContain("[.env.example](https://github.com/zyx1121/sensorium/blob/main/.env.example)");
     // A Collector re-exports with gzip unless told not to, and ingest refuses gzip.
     expect(page).toContain("<code>compression: none</code>");
   });

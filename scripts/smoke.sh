@@ -25,6 +25,16 @@ wait_for() {
 wait_for "$ingest/health"
 wait_for "$mcp/health"
 
+# The compose healthchecks pass too, not only the endpoints.
+for service in ingest mcp; do
+	tries=0
+	until [ "$(docker compose ps "$service" --format '{{.Health}}')" = healthy ]; do
+		tries=$((tries + 1))
+		[ "$tries" -lt 60 ] || fail "$service never became healthy"
+		sleep 2
+	done
+done
+
 token=$(docker compose run --rm -T ingest register-project smoke | sed -n 's/.*: \(sk_[0-9a-f]*\)$/\1/p')
 [ -n "$token" ] || fail "register-project printed no token"
 

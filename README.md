@@ -21,8 +21,8 @@ the logs, traces and metrics of many services in one Postgres store and hands
 them to agents over MCP, so the question "what broke?" goes to a tool call.
 
 ```
-> "is anything failing on www-zyx today?"
-  ⚡ error_summary { project: "www-zyx", windowMinutes: 1440 }
+> "is anything failing on my-service today?"
+  ⚡ error_summary { project: "my-service", windowMinutes: 1440 }
 ✓ 0 error logs, 24 error spans in the last 24 hours
 ```
 
@@ -45,13 +45,28 @@ docker compose up -d
 ```
 
 That starts Postgres, applies the schema, and runs the receiver on port 8787,
-the MCP endpoint on port 8788 and a retention sweep every 24 hours, all from
-the image `ghcr.io/zyx1121/sensorium`.
+the MCP endpoint on port 8788 and a retention sweep every 24 hours, all three
+from the image `ghcr.io/zyx1121/sensorium`.
 
 > [!IMPORTANT]
 > Both ports listen on 127.0.0.1, and tokens travel in the Authorization
-> header. Put a reverse proxy with TLS in front of them (Caddy, nginx) before
-> anything outside the machine talks to sensorium.
+> header. Put a reverse proxy with TLS in front of them before anything outside
+> the machine talks to sensorium.
+
+The steps below use one host for both endpoints, so the proxy sends `/mcp` to
+port 8788 and everything else to port 8787. With Caddy, which also gets the
+certificate:
+
+```caddyfile
+sensorium.example.com {
+	handle /mcp* {
+		reverse_proxy 127.0.0.1:8788
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8787
+	}
+}
+```
 
 Without Docker, [deploy/](deploy/) has systemd units for a checkout with Bun
 and a local Postgres.
