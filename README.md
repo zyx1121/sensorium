@@ -1,54 +1,142 @@
+```
+███████╗███████╗███╗   ██╗███████╗ ██████╗ ██████╗ ██╗██╗   ██╗███╗   ███╗
+██╔════╝██╔════╝████╗  ██║██╔════╝██╔═══██╗██╔══██╗██║██║   ██║████╗ ████║
+███████╗█████╗  ██╔██╗ ██║███████╗██║   ██║██████╔╝██║██║   ██║██╔████╔██║
+╚════██║██╔══╝  ██║╚██╗██║╚════██║██║   ██║██╔══██╗██║██║   ██║██║╚██╔╝██║
+███████║███████╗██║ ╚████║███████║╚██████╔╝██║  ██║██║╚██████╔╝██║ ╚═╝ ██║
+╚══════╝╚══════╝╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝     ╚═╝
+```
+
 # sensorium
 
-Agent-native observability. The consumer of this data is an agent doing
-maintenance/analysis over MCP — not a human staring at a dashboard. Multiple
-projects share one store, partitioned by OTel's native `service.namespace`.
+> Observability for agents: OpenTelemetry in, MCP out.
 
-## Architecture
+`opentelemetry` · `mcp` · `postgres` · `docker` · `bun`
+
+[![CI](https://github.com/zyx1121/sensorium/actions/workflows/ci.yml/badge.svg)](https://github.com/zyx1121/sensorium/actions) &nbsp;[![Image](https://img.shields.io/badge/image-ghcr.io%2Fzyx1121%2Fsensorium-111111)](https://github.com/zyx1121/sensorium/pkgs/container/sensorium) &nbsp;[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
+
+Your services already speak OpenTelemetry, but the one reading their logs at
+3 am is increasingly an agent, not a person with a dashboard. sensorium keeps
+the logs, traces and metrics of many services in one Postgres store and hands
+them to agents over MCP, so the question "what broke?" goes to a tool call.
+
+```
+> "is anything failing on www-zyx today?"
+  ⚡ error_summary { project: "www-zyx", windowMinutes: 1440 }
+✓ 0 error logs, 24 error spans in the last 24 hours
+```
+
+## What it does
+
+- **Ingests OpenTelemetry**: OTLP over HTTP, as JSON or protobuf, at `/v1/logs`, `/v1/traces` and `/v1/metrics`.
+- **Keeps projects apart**: each project has its own ingest token, and the token decides where its records land.
+- **Answers agents**: eight read-only MCP tools at `/mcp`: `list_projects`, `query_logs`, `query_traces`, `list_traces`, `error_summary`, `top_sources`, `query_metrics` and `search`.
+- **Expires data by itself**: metrics after 14 days, spans and logs after 30, by default.
+
+## Deploy
+
+With Docker Compose, on any machine with Docker:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/zyx1121/sensorium/main/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/zyx1121/sensorium/main/.env.example
+# set POSTGRES_PASSWORD and SENSORIUM_MCP_TOKEN in .env, e.g. with `openssl rand -hex 32`
+docker compose up -d
+```
+
+That starts Postgres, applies the schema, and runs the receiver on port 8787,
+the MCP endpoint on port 8788 and a retention sweep every 24 hours, all from
+the image `ghcr.io/zyx1121/sensorium`.
+
+> [!IMPORTANT]
+> Both ports listen on 127.0.0.1, and tokens travel in the Authorization
+> header. Put a reverse proxy with TLS in front of them (Caddy, nginx) before
+> anything outside the machine talks to sensorium.
+
+Without Docker, [deploy/](deploy/) has systemd units for a checkout with Bun
+and a local Postgres.
+
+## Use
+
+1. Register a project. The token is printed once; running it again for the
+   same name rotates it.
+
+   ```sh
+   docker compose run --rm ingest register-project my-service
+   ```
+
+2. Point the service's OpenTelemetry exporter at sensorium:
+
+   ```sh
+   OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.example.com
+   OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+   OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20<ingest token>
+   ```
+
+   sensorium takes neither gzip nor gRPC. For an exporter that only speaks
+   those, put an OpenTelemetry Collector in front, as in
+   [collector/](collector/), with `compression: none` on its otlphttp exporter.
+
+3. Connect an agent to the MCP endpoint:
+
+   ```sh
+   claude mcp add --transport http sensorium https://sensorium.example.com/mcp \
+     --header "Authorization: Bearer <SENSORIUM_MCP_TOKEN>"
+   ```
+
+4. Ask it what broke. `error_summary` and `top_sources` are the usual first
+   calls.
+
+## Configure
+
+Set these in `.env`; [.env.example](.env.example) documents every one.
+
+| Key | What it sets | Default |
+|-----|--------------|---------|
+| `POSTGRES_PASSWORD` | The bundled Postgres password (Docker Compose) | required |
+| `SENSORIUM_MCP_TOKEN` | The bearer token every agent sends to `/mcp` | required |
+| `SENSORIUM_VERSION` | The image tag compose.yaml runs | `latest` |
+| `SENSORIUM_BIND` | The address the two ports listen on | `127.0.0.1` |
+| `SENSORIUM_INGEST_PORT`, `SENSORIUM_MCP_PORT` | The published ports | `8787`, `8788` |
+| `SENSORIUM_RETENTION_METRIC_DAYS` | Days of metrics to keep | `14` |
+| `SENSORIUM_RETENTION_SPAN_DAYS`, `SENSORIUM_RETENTION_LOG_DAYS` | Days of spans and of logs to keep | `30` |
+| `SENSORIUM_RETENTION_AHEAD_DAYS` | Days of metric partitions created ahead | `7` |
+| `DATABASE_URL`, `PORT`, `MCP_PORT` | Only for a run from source | |
+
+Size the metric window against real throughput: one busy Proxmox host writes
+about 2.4 GB of metrics a day, so 14 days is about 33 GB on disk.
+
+## How it works
 
 ```mermaid
 flowchart LR
-    producer["producer\n(e.g. ai.winlab.tw)"] -->|"OTLP/HTTP\n+ per-project bearer"| ingest
-    collector["OTel Collector\n(optional, standard binary)"] -->|"OTLP/HTTP JSON\n+ per-project bearer"| ingest
-    producer -.->|"or straight to"| collector
+    producer["producer"] -->|"OTLP/HTTP\n+ project token"| ingest
+    collector["OTel Collector\n(optional)"] -->|"OTLP/HTTP\n+ project token"| ingest
+    producer -.->|"or through"| collector
 
-    subgraph sensorium.zyx.tw
-        ingest["apps/ingest\n(Bun.serve, OTLP/HTTP receiver)"] --> pg[("Postgres\nlogs / spans / metric_points\n+ projects registry")]
-        mcp["apps/mcp\n(MCP server, read-only)"] --> pg
+    subgraph sensorium
+        ingest["apps/ingest\n(OTLP/HTTP receiver)"] --> pg[("Postgres\nlogs, spans, metric_points\n+ projects")]
+        mcp["apps/mcp\n(read-only MCP)"] --> pg
     end
 
-    agent["agent (kilo)"] -->|"bearer"| mcp
+    agent["agent"] -->|"MCP token"| mcp
 ```
 
-`packages/core` maps OTLP/JSON → row shapes (pure functions, unit tested).
-`packages/db` owns the Postgres schema, migrations, and query helpers shared
-by ingest (writes) and mcp (reads). See `collector/README.md` for the two
-supported ingest paths (Collector in front, vs. straight to `apps/ingest`).
+An ingest token is bound to one project when it is registered. The
+`service.namespace` a producer claims is recorded but never trusted for
+scoping: the token alone decides which project rows land in. The MCP endpoint
+has one shared token for its trusted readers, and reads are cross-project.
+`metric_points` is partitioned by UTC day, so expiring metrics drops whole
+tables and returns the space at once.
 
-**Auth model**: an ingest bearer token is bound 1:1 to a project at
-registration time. The `service.namespace` a client claims in its OTLP
-payload is recorded for reference but never trusted for scoping — the token
-decides which project rows land in, full stop. The MCP endpoint has a single
-shared bearer token (one trusted consumer); reads are cross-project.
+## Develop
 
-## Workspace layout
-
-```
-apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON or OTLP/protobuf.
-                 With SENSORIUM_LANDING=1 it also serves the zyx.tw landing page at /.
-apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, list_traces, error_summary, top_sources, query_metrics, search.
-packages/core/   Signal model + OTLP/JSON → row mapping (pure, unit tested) + span-tree builder.
-packages/db/     SQL migrations, migration runner, query helpers shared by ingest/mcp.
-collector/       OTel Collector config for producers that don't export OTLP/JSON directly.
-```
-
-## Local development
-
-Requires a Postgres reachable via `DATABASE_URL` (either `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`, or an existing local install).
+Requires Bun 1.3 and a Postgres reachable at `DATABASE_URL`, for example
+`docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`.
 
 ```sh
 bun install
-cp .env.example .env   # fill in DATABASE_URL, SENSORIUM_MCP_TOKEN
+cp .env.example .env   # set DATABASE_URL and SENSORIUM_MCP_TOKEN
 
 bun run db:migrate                        # apply packages/db/migrations
 bun run db:register-project my-project    # prints an ingest token, once
@@ -57,41 +145,40 @@ bun run --filter @sensorium/ingest dev    # :8787
 bun run --filter @sensorium/mcp dev       # :8788
 ```
 
-Send it something:
-
 ```sh
-curl -X POST localhost:8787/v1/logs \
-  -H "content-type: application/json" \
-  -H "authorization: Bearer <token from db:register-project>" \
-  -d '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"demo"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"'"$(date +%s)"'000000000","severityText":"INFO","body":{"stringValue":"hello sensorium"}}]}]}]}'
+bun run typecheck   # tsc --noEmit across the workspace
+bun run lint        # eslint, shared @sensorium/eslint-config
+bun run test        # bun test; packages/db runs its integration tests when DATABASE_URL is set
 ```
 
-## Commands
-
-```sh
-bun run build       # turbo build (packages: tsc; apps: bun build --target bun)
-bun run typecheck    # turbo typecheck (tsc --noEmit) across the workspace
-bun run test         # turbo test (bun test) — packages/core + apps/ingest are pure unit tests;
-                     # packages/db has DATABASE_URL-gated integration tests (skipped, not failed, if unset)
-bun run lint         # eslint . (flat config, shared @sensorium/eslint-config)
+```
+apps/ingest/     OTLP/HTTP receiver: POST /v1/{logs,traces,metrics}, OTLP/JSON or OTLP/protobuf.
+                 With SENSORIUM_LANDING=1 it also serves sensorium.zyx.tw's landing page at /.
+apps/mcp/        MCP server over streamable HTTP, stateless, read-only.
+packages/core/   Signal model and OTLP to row mapping (pure, unit tested), span-tree builder.
+packages/db/     SQL migrations, the migration runner and CLI, query helpers shared by ingest and mcp.
+collector/       OTel Collector config for producers that cannot export OTLP/HTTP directly.
+bin/sensorium    The image's entry point: ingest, mcp, migrate, register-project, retention.
 ```
 
-## v0 scope / known gaps
+CI builds the image and runs [scripts/smoke.sh](scripts/smoke.sh) against a
+real `docker compose up`: a project registers, a log goes in over OTLP and comes
+back over MCP. Every push to main publishes `ghcr.io/zyx1121/sensorium:sha-<commit>`;
+a `v*` tag publishes the SemVer tags and `latest`.
 
-- Ingest accepts OTLP/**JSON** and OTLP/**protobuf** (`Content-Type:
-  application/json` or `application/x-protobuf`); anything else gets a 415.
-  See `collector/README.md`.
-- Histogram metric points store the aggregate `sum` as `value`, not
-  per-bucket data — fine for "is this moving", not for percentiles.
-- No rate limiting / payload size caps on `apps/ingest` yet.
-- `apps/mcp`'s `search` tool is `ILIKE`, not full-text search.
-- `top_sources` unions spans and logs by `client.address` — some producers (e.g.
-  Vercel) attach attribution to a log record (429/401) rather than the span. Its
-  geo/route breakdown still reads `client.address`/`geo.*`/`http.route` straight out
-  of `attributes` (jsonb) — no dedicated columns/indexes yet. Fine at v0 volume;
-  revisit (generated columns + index) if it's slow at scale.
-- `http_status_code` is only populated on spans classified as inbound (`kind =
-  "server"`, or carrying `http.route`/`http.target`/`vercel.matched_path`) — outbound
-  spans (this service's own `fetch()` calls) never get it, so a callee's status can't
-  pollute `error_summary`/`top_sources`. See `isInboundSpan`/`isOutboundSpan` in
-  `packages/core`.
+## Limitations
+
+- Ingest accepts OTLP/HTTP with `Content-Type: application/json` or `application/x-protobuf`, uncompressed. Anything else gets a 415, and gzip bodies a 400.
+- Histogram points store the aggregate `sum` as `value`, not buckets: fine for "is this moving", not for percentiles.
+- No rate limits or payload size caps on ingest yet.
+- `search` is `ILIKE`, not full-text search.
+- `top_sources` reads `client.address`, `geo.*` and `http.route` straight out of the jsonb attributes, with no dedicated columns or indexes yet.
+- `http_status_code` is set only on inbound spans (`kind = "server"`, or carrying `http.route`, `http.target` or `vercel.matched_path`), so a callee's status never pollutes `error_summary` or `top_sources`.
+
+## Contributing
+
+Issues and PRs welcome: start with [CONTRIBUTING.md](https://github.com/zyx1121/.github/blob/main/CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE) · named for the part of the brain that receives everything the senses report.

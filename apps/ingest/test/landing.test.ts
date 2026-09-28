@@ -36,10 +36,10 @@ describe("landing page", () => {
     expect(body).toContain(`© ${new Date().getUTCFullYear()}`);
   });
 
-  test("says what it is, what it does and how to use it, in HTML and Markdown", async () => {
+  test("says what it is, what it does and how to deploy, use and configure it, in HTML and Markdown", async () => {
     const page = await (await get(on, "/")).text();
     const md = await (await get(on, "/index.md")).text();
-    for (const heading of ["What it is", "What it does", "How to use it"]) {
+    for (const heading of ["What it is", "What it does", "Deploy", "Use", "Configure"]) {
       expect(page).toContain(`<h2>${heading}</h2>`);
       expect(md).toContain(`## ${heading}\n`);
     }
@@ -51,7 +51,13 @@ describe("landing page", () => {
     // Placeholders in the code blocks are escaped, not parsed as tags.
     expect(page).toContain("Bearer%20&lt;ingest token&gt;");
     expect(page).not.toContain("<ingest token>");
-    expect(md).toContain("   ```sh\n   OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.zyx.tw\n");
+    expect(md).toContain("   ```sh\n   OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.example.com\n");
+    expect(page).toContain("<pre><code>docker compose up -d</code></pre>");
+    // Links that leave zyx.tw open in a new tab with no referrer; zyx.tw's own do not.
+    expect(page).toContain('<a class="link" href="https://github.com/zyx1121/sensorium" target="_blank" rel="noopener noreferrer">GitHub</a>');
+    expect(page).toContain('<a href="https://github.com/zyx1121/sensorium#configure" target="_blank" rel="noopener noreferrer">README</a>');
+    expect(page).toContain('<a class="link" href="https://www.zyx.tw/privacy">Privacy</a>');
+    expect(md).toContain("[README](https://github.com/zyx1121/sensorium#configure)");
     // A Collector re-exports with gzip unless told not to, and ingest refuses gzip.
     expect(page).toContain("<code>compression: none</code>");
   });

@@ -1,0 +1,93 @@
+# sensorium on Docker Compose: Postgres, the OTLP receiver, the MCP endpoint
+# and the daily retention sweep, all from one image.
+#
+#   cp .env.example .env      # set POSTGRES_PASSWORD and SENSORIUM_MCP_TOKEN
+#   docker compose up -d
+#   docker compose run --rm ingest register-project my-service
+#
+# Both ports bind to 127.0.0.1: tokens travel in the Authorization header, so
+# put a reverse proxy with TLS in front before either leaves the machine
+# (SENSORIUM_BIND=0.0.0.0 exposes them to the network as plain HTTP).
+name: sensorium
+
+x-sensorium: &sensorium
+  image: ghcr.io/zyx1121/sensorium:${SENSORIUM_VERSION:-latest}
+  init: true
+  restart: unless-stopped
+  env_file: .env
+
+x-database: &database
+  DATABASE_URL: postgres://sensorium:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/sensorium
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sensorium
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: sensorium
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sensorium", "-d", "sensorium"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Applies the schema and exits; the other roles start once it succeeds.
+  migrate:
+    <<: *sensorium
+    command: migrate
+    restart: "no"
+    environment: *database
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ingest:
+    <<: *sensorium
+    command: ingest
+    environment:
+      <<: *database
+      PORT: "8787"
+    ports:
+      - "${SENSORIUM_BIND:-127.0.0.1}:${SENSORIUM_INGEST_PORT:-8787}:8787"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8787/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  mcp:
+    <<: *sensorium
+    command: mcp
+    environment:
+      <<: *database
+      MCP_PORT: "8788"
+      SENSORIUM_MCP_TOKEN: ${SENSORIUM_MCP_TOKEN:?set SENSORIUM_MCP_TOKEN in .env}
+    ports:
+      - "${SENSORIUM_BIND:-127.0.0.1}:${SENSORIUM_MCP_PORT:-8788}:8788"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8788/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Creates partitions ahead and expires old rows, now and every 24 hours.
+  retention:
+    <<: *sensorium
+    command: retention-daily
+    environment: *database
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres:

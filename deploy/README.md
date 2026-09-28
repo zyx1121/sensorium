@@ -1,11 +1,13 @@
 # deploy
 
-systemd units for a sensorium instance. Copy to `/etc/systemd/system/`, then
-`systemctl daemon-reload`.
+systemd units for running sensorium without Docker. Docker Compose is the
+standard way to deploy it (see the README); these are for a host where Docker
+does not fit, such as an LXC container. Copy them to `/etc/systemd/system/`,
+then `systemctl daemon-reload`.
 
-An instance is a checkout at `/opt/sensorium`, an env file at
-`/etc/sensorium/app.env` (see `.env.example`), and a local Postgres. Two are
-live: `sensorium-zyx` (LXC 205) and `sensorium-winlab` (LXC 202).
+An instance is a checkout at `/opt/sensorium` with `bun install` run in it, an
+env file at `/etc/sensorium/app.env` (see `.env.example`), and a local
+Postgres.
 
 | Unit                          | What it does                        |
 | ----------------------------- | ----------------------------------- |

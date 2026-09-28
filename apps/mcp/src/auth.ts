@@ -7,7 +7,7 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-/** MCP has a single trusted consumer (kilo) — one shared bearer token, no per-caller identity. */
+/** MCP has one shared bearer token for its trusted readers, with no per-caller identity. */
 export function authenticateMcp(req: Request): boolean {
   const expected = process.env.SENSORIUM_MCP_TOKEN;
   if (!expected) {
