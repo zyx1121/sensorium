@@ -2,11 +2,13 @@ import path from "node:path";
 
 /**
  * The page sensorium.zyx.tw answers / with: what sensorium is, what it does,
- * how to deploy, use and configure it (the README's sections, shorter), in the frame every zyx.tw site shares (the zyx mark top
- * left, mirrored on hover; Privacy and Terms bottom left; the copyright bottom
- * right; all 14 px on 20 px lines, 20 px in from the corners). The column, type
- * sizes (20 px body text on a phone, 16 px from 640 px up) and dark tokens are
- * www.zyx.tw's, and the font is the same Inter subset (static/README.md). An agent that asks for text/markdown, or opens
+ * how to deploy, use and configure it (the README's sections, shorter), in the
+ * frame every zyx.tw site shares (the zyx mark top left, mirrored on hover;
+ * GitHub top right; Privacy and Terms bottom left; the copyright bottom right;
+ * all 14 px on 20 px lines, 20 px in from the corners, each with its tip, see
+ * TIPS). The column, type sizes (20 px body text on a phone, 16 px from 640 px
+ * up) and dark tokens are www.zyx.tw's, and the font is the same Inter subset
+ * (static/README.md). An agent that asks for text/markdown, or opens
  * /index.md, gets the same page as Markdown: both are rendered from PAGE.
  *
  * Only an instance started with SENSORIUM_LANDING=1 serves it; the others
@@ -134,6 +136,30 @@ const inline = (text: string) =>
     .map((part) => (/^`[^`]+`$/.test(part) ? `<code>${escape(part.slice(1, -1))}</code>` : links(escape(part))))
     .join("");
 
+/**
+ * The corner tips every zyx.tw site shows (CornerTip in www.zyx.tw's
+ * packages/ui), saying what an item's label leaves out. A tip opens at once on
+ * hover and on keyboard focus of a link, toward the page and lined up with the
+ * item's outer edge, and stays open while the pointer is on it (STYLE). Like
+ * www.zyx.tw's, it is visual only.
+ */
+const TIPS = {
+  mark: "www.zyx.tw",
+  github: "zyx1121/sensorium",
+  privacy: "What every zyx.tw site stores and logs",
+  terms: "The rules for every zyx.tw site",
+  copyright: "Loki (詹詠翔)",
+};
+
+const tip = (text: string) => `<span class="tip" aria-hidden="true">${escape(text)}</span>`;
+
+/**
+ * Closes the corner tips as Base UI does on www.zyx.tw: Escape or a press
+ * closes the open one until the pointer enters it again or focus leaves it,
+ * and a touch never opens one. The CSP allows it by its hash.
+ */
+const SCRIPT = `for(const t of document.querySelectorAll(".tipped")){t.addEventListener("pointerenter",e=>t.classList.toggle("off",e.pointerType==="touch"));t.addEventListener("pointerdown",()=>t.classList.add("off"));t.addEventListener("focusout",()=>t.classList.remove("off"))}addEventListener("keydown",e=>{if(e.key==="Escape")for(const t of document.querySelectorAll(".tipped:hover,.tipped:focus-within"))t.classList.add("off")})`;
+
 function block(b: Block): string {
   if ("p" in b) return `<p>${inline(b.p)}</p>`;
   if ("rows" in b) {
@@ -194,6 +220,21 @@ a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent
 .mark:hover svg{transform:scaleX(-1)}
 @media (prefers-reduced-motion:no-preference){.mark svg{transition:transform 300ms cubic-bezier(0.4,0,0.2,1)}}
 .br p{color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.tipped{position:relative;display:flex}
+.tl .tipped,.tr .tipped{--tip-from:-8px}.bl .tipped,.br .tipped{--tip-from:8px}
+.tip,.tipped::after{position:absolute;z-index:50;pointer-events:none;background:var(--foreground);opacity:0;visibility:hidden}
+.tip{width:max-content;max-width:320px;padding:6px 12px;border-radius:8px;color:var(--background);font-size:12px;line-height:16px;font-weight:400;font-variant-numeric:normal;transform:scale(.95)}
+.tip::before{content:"";position:absolute;left:0;right:0;height:4px}
+.tipped::after{content:"";left:calc(50% - 5px);width:10px;height:10px;border-radius:2px;transform:rotate(45deg)}
+.tl .tip,.tr .tip{top:calc(100% + 4px)}.tl .tip::before,.tr .tip::before{bottom:100%}.tl .tipped::after,.tr .tipped::after{top:calc(100% + 1px)}
+.bl .tip,.br .tip{bottom:calc(100% + 4px)}.bl .tip::before,.br .tip::before{top:100%}.bl .tipped::after,.br .tipped::after{bottom:calc(100% + 1px)}
+.tl .tip{left:0;transform-origin:top left}.tr .tip{right:0;transform-origin:top right}.bl .tip{left:0;transform-origin:bottom left}.br .tip{right:0;transform-origin:bottom right}
+@media (hover:hover){.tipped:hover>.tip,.tipped:hover::after{opacity:1;visibility:visible;transition:visibility 0s}.tipped:hover>.tip{transform:none;pointer-events:auto}}
+.tipped:has(>a:focus-visible)>.tip,.tipped:has(>a:focus-visible)::after{opacity:1;visibility:visible;transition:visibility 0s}.tipped:has(>a:focus-visible)>.tip{transform:none}
+.tipped.off>.tip,.tipped.off::after{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
+@media (prefers-reduced-motion:no-preference){.tip,.tipped::after{transition:opacity 150ms ease,transform 150ms ease,visibility 0s linear 150ms}.tipped.off>.tip,.tipped.off::after{transition:opacity 150ms ease,visibility 0s linear 150ms!important}.tipped:hover>.tip,.tipped:has(>a:focus-visible)>.tip{animation:tip-in 150ms ease}.tipped:hover::after,.tipped:has(>a:focus-visible)::after{animation:tip-arrow-in 150ms ease}}
+@keyframes tip-in{from{opacity:0;transform:translateY(var(--tip-from)) scale(.95)}}
+@keyframes tip-arrow-in{from{opacity:0;transform:translateY(var(--tip-from)) rotate(45deg)}}
 .fade{pointer-events:none;position:fixed;left:0;right:0;z-index:40;height:64px}
 .fade.top{top:0;background:linear-gradient(to bottom,var(--background) 60%,transparent)}
 .fade.bottom{bottom:0;background:linear-gradient(to top,var(--background) 60%,transparent)}
@@ -212,17 +253,18 @@ function html(year: number): string {
 <style>${STYLE}</style>
 </head>
 <body>
-<header><div class="fade top"></div><div class="corner tl"><a class="mark" href="https://www.zyx.tw" aria-label="zyx.tw"><svg viewBox="0 0 4096 3615" aria-hidden="true" focusable="false"><path d="${MARK}"/></svg></a></div>
-<nav class="corner tr" aria-label="Main"><a class="link" href="${REPO}"${target(REPO)}>GitHub</a></nav></header>
+<header><div class="fade top"></div><div class="corner tl"><span class="tipped"><a class="mark" href="https://www.zyx.tw" aria-label="zyx.tw"><svg viewBox="0 0 4096 3615" aria-hidden="true" focusable="false"><path d="${MARK}"/></svg></a>${tip(TIPS.mark)}</span></div>
+<nav class="corner tr" aria-label="Main"><span class="tipped"><a class="link" href="${REPO}"${target(REPO)}>GitHub</a>${tip(TIPS.github)}</span></nav></header>
 <main>
 <h1>${PAGE.title}</h1>
 <p class="sub">${inline(PAGE.tagline)}</p>
 ${PAGE.sections.map(({ heading, blocks }) => `<section><h2>${escape(heading)}</h2>${blocks.map(block).join("")}</section>`).join("\n")}
 </main>
 <footer><div class="fade bottom"></div>
-<nav class="corner bl" aria-label="Legal"><a class="link" href="https://www.zyx.tw/privacy">Privacy</a><a class="link" href="https://www.zyx.tw/terms">Terms</a></nav>
-<div class="corner br"><p>© ${year}</p></div>
+<nav class="corner bl" aria-label="Legal"><span class="tipped"><a class="link" href="https://www.zyx.tw/privacy">Privacy</a>${tip(TIPS.privacy)}</span><span class="tipped"><a class="link" href="https://www.zyx.tw/terms">Terms</a>${tip(TIPS.terms)}</span></nav>
+<div class="corner br"><p class="tipped">© ${year}${tip(TIPS.copyright)}</p></div>
 </footer>
+<script>${SCRIPT}</script>
 </body>
 </html>
 `;
@@ -238,7 +280,9 @@ Part of [zyx.tw](https://www.zyx.tw): [Privacy](https://www.zyx.tw/privacy), [Te
 `;
 
 // Hashes stand in for 'unsafe-inline': the one <style> block is all the page runs.
-const CSP = `default-src 'none'; style-src 'sha256-${new Bun.CryptoHasher("sha256").update(STYLE).digest("base64")}'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("base64");
+
+const CSP = `default-src 'none'; style-src 'sha256-${sha256(STYLE)}'; script-src 'sha256-${sha256(SCRIPT)}'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 
 // HEAD gets the body too: Bun.serve drops it on the wire and sends the length a
 // GET would, which a null body would announce as 0 (RFC 9110 9.3.2).
