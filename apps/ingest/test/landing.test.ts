@@ -36,6 +36,19 @@ describe("landing page", () => {
     expect(body).toContain(`© ${new Date().getUTCFullYear()}`);
   });
 
+  test("gives each corner item the tip every zyx.tw site shows", async () => {
+    const body = await (await get(on, "/")).text();
+    for (const tip of [
+      "www.zyx.tw",
+      "zyx1121/sensorium",
+      "What every zyx.tw site stores and logs",
+      "The rules for every zyx.tw site",
+      "Loki (詹詠翔)",
+    ]) {
+      expect(body).toContain(`<span class="tip" aria-hidden="true">${tip}</span>`);
+    }
+  });
+
   test("says what it is, what it does and how to deploy, use and configure it, in HTML and Markdown", async () => {
     const page = await (await get(on, "/")).text();
     const md = await (await get(on, "/index.md")).text();
@@ -68,6 +81,15 @@ describe("landing page", () => {
     const style = (await res.text()).match(/<style>([\s\S]*?)<\/style>/)![1]!;
     const hash = new Bun.CryptoHasher("sha256").update(style).digest("base64");
     expect(res.headers.get("content-security-policy")).toContain(`'sha256-${hash}'`);
+  });
+
+  test("the CSP hash matches the page's one <script> block, the corner tips' closing", async () => {
+    const res = await get(on, "/");
+    const scripts = [...(await res.text()).matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    expect(scripts.length).toBe(1);
+    const hash = new Bun.CryptoHasher("sha256").update(scripts[0]!).digest("base64");
+    expect(res.headers.get("content-security-policy")).toContain(`script-src 'sha256-${hash}'`);
+    expect(scripts[0]).toContain('e.key==="Escape"');
   });
 
   test("answers agents in Markdown, by Accept or at /index.md", async () => {
