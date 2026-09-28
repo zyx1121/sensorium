@@ -1,8 +1,8 @@
 import path from "node:path";
 
 /**
- * The page sensorium.zyx.tw answers / with: what sensorium is, what it does
- * and how to use it, in the frame every zyx.tw site shares (the zyx mark top
+ * The page sensorium.zyx.tw answers / with: what sensorium is, what it does,
+ * how to deploy, use and configure it (the README's sections, shorter), in the frame every zyx.tw site shares (the zyx mark top
  * left, mirrored on hover; Privacy and Terms bottom left; the copyright bottom
  * right; all 14 px on 20 px lines, 20 px in from the corners). The column, type
  * sizes (20 px body text on a phone, 16 px from 640 px up) and dark tokens are
@@ -31,16 +31,17 @@ type Block =
   | { rows: [label: string, text: string][] }
   | { steps: { text: string; code?: string }[] };
 
-// Text is plain with `backticks` for code, so the Markdown is the text itself.
+// Text is plain with `backticks` for code and [text](url) for links, so the
+// Markdown is the text itself. It follows the README, which has the details.
 const PAGE: { title: string; tagline: string; sections: { heading: string; blocks: Block[] }[] } = {
   title: "sensorium",
-  tagline: "Observability for agents.",
+  tagline: "Observability for agents: OpenTelemetry in, MCP out.",
   sections: [
     {
       heading: "What it is",
       blocks: [
         {
-          p: "sensorium keeps the logs, traces and metrics of Loki's services in one Postgres store and serves them to agents over MCP. There is no dashboard: the reader is an agent doing maintenance or analysis.",
+          p: "sensorium keeps the logs, traces and metrics of many services in one Postgres store and serves them to agents over MCP. There is no dashboard: the reader is an agent doing maintenance or analysis. It is open source under the MIT License.",
         },
       ],
     },
@@ -55,27 +56,58 @@ const PAGE: { title: string; tagline: string; sections: { heading: string; block
               "MCP",
               "Eight read-only tools at `/mcp`: `list_projects`, `query_logs`, `query_traces`, `list_traces`, `error_summary`, `top_sources`, `query_metrics` and `search`.",
             ],
-            ["Retention", "Metrics for 14 days, spans and logs for 30."],
+            ["Retention", "Metrics for 14 days, spans and logs for 30, by default."],
           ],
         },
       ],
     },
     {
-      heading: "How to use it",
+      heading: "Deploy",
       blocks: [
         {
           steps: [
-            { text: "Ask Loki for a project and its ingest token. This instance serves Loki's own services." },
             {
-              text: "Point the service's OpenTelemetry exporter here. sensorium takes neither gzip nor gRPC. For an exporter that only speaks those, put an OpenTelemetry Collector in front and set `compression: none` on its otlphttp exporter.",
-              code: "OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.zyx.tw\nOTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\nOTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20<ingest token>",
+              text: "On any machine with Docker, fetch the compose file and the env example. Set `POSTGRES_PASSWORD` and `SENSORIUM_MCP_TOKEN` in `.env`.",
+              code: "curl -fsSLO https://raw.githubusercontent.com/zyx1121/sensorium/main/compose.yaml\ncurl -fsSL -o .env https://raw.githubusercontent.com/zyx1121/sensorium/main/.env.example",
             },
             {
-              text: "Connect an agent to `/mcp` with the MCP token.",
-              code: 'claude mcp add --transport http sensorium https://sensorium.zyx.tw/mcp \\\n  --header "Authorization: Bearer <MCP token>"',
+              text: "Start it. The receiver on port 8787, the MCP endpoint on port 8788 and a daily retention sweep come up from one image, beside Postgres.",
+              code: "docker compose up -d",
+            },
+            {
+              text: "Put a reverse proxy with TLS in front, and route `/mcp` to port 8788 and everything else to port 8787. Both ports listen on 127.0.0.1, and tokens travel in the Authorization header.",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      heading: "Use",
+      blocks: [
+        {
+          steps: [
+            {
+              text: "Register a project. The token is printed once, and running it again for the same name rotates it.",
+              code: "docker compose run --rm ingest register-project my-service",
+            },
+            {
+              text: "Point the service's OpenTelemetry exporter at sensorium. sensorium takes neither gzip nor gRPC. For an exporter that only speaks those, put an OpenTelemetry Collector in front and set `compression: none` on its otlphttp exporter.",
+              code: "OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.example.com\nOTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\nOTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20<ingest token>",
+            },
+            {
+              text: "Connect an agent to the MCP endpoint.",
+              code: 'claude mcp add --transport http sensorium https://sensorium.example.com/mcp \\\n  --header "Authorization: Bearer <SENSORIUM_MCP_TOKEN>"',
             },
             { text: "Ask it what broke. `error_summary` and `top_sources` are the usual first calls." },
           ],
+        },
+      ],
+    },
+    {
+      heading: "Configure",
+      blocks: [
+        {
+          p: "Every setting is an environment variable in `.env`. `POSTGRES_PASSWORD` and `SENSORIUM_MCP_TOKEN` are required, and the `SENSORIUM_RETENTION_*_DAYS` keys set how long data stays. [.env.example](https://github.com/zyx1121/sensorium/blob/main/.env.example) documents every key.",
         },
       ],
     },
@@ -85,8 +117,22 @@ const PAGE: { title: string; tagline: string; sections: { heading: string; block
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** Escapes the text, then turns `backticks` into <code>. */
-const inline = (text: string) => escape(text).replace(/`([^`]+)`/g, "<code>$1</code>");
+const REPO = "https://github.com/zyx1121/sensorium";
+
+/** Attributes for a link: one that leaves zyx.tw opens in a new tab with no referrer. */
+const target = (href: string) =>
+  /^https?:\/\/([^/]+\.)?zyx\.tw(\/|$)/.test(href) ? "" : ' target="_blank" rel="noopener noreferrer"';
+
+/** [text](url) in escaped text becomes a link, for http and https URLs only. */
+const links = (escaped: string) =>
+  escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, text: string, href: string) => `<a href="${href}"${target(href)}>${text}</a>`);
+
+/** Escapes the text and turns `backticks` into <code> and, outside code, [text](url) into a link. */
+const inline = (text: string) =>
+  text
+    .split(/(`[^`]+`)/)
+    .map((part) => (/^`[^`]+`$/.test(part) ? `<code>${escape(part.slice(1, -1))}</code>` : links(escape(part))))
+    .join("");
 
 function block(b: Block): string {
   if ("p" in b) return `<p>${inline(b.p)}</p>`;
@@ -138,7 +184,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 :not(pre)>code{background:var(--muted);padding:1px 4px;border-radius:4px;overflow-wrap:anywhere}
 pre{margin-top:12px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;overflow-x:auto;line-height:1.45}
 .corner{position:fixed;z-index:50;display:flex;align-items:center;gap:16px;font-size:14px;line-height:20px}
-.tl{top:20px;left:20px}.bl{bottom:20px;left:20px}.br{right:20px;bottom:20px}
+.tl{top:20px;left:20px}.tr{top:20px;right:20px}.bl{bottom:20px;left:20px}.br{right:20px;bottom:20px}
 a{color:inherit;text-decoration:none;border-radius:6px;outline-offset:4px}
 a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent)}
 .link{position:relative;color:var(--muted-foreground);transition:color 150ms cubic-bezier(0.4,0,0.2,1)}
@@ -166,7 +212,8 @@ function html(year: number): string {
 <style>${STYLE}</style>
 </head>
 <body>
-<header><div class="fade top"></div><div class="corner tl"><a class="mark" href="https://www.zyx.tw" aria-label="zyx.tw"><svg viewBox="0 0 4096 3615" aria-hidden="true" focusable="false"><path d="${MARK}"/></svg></a></div></header>
+<header><div class="fade top"></div><div class="corner tl"><a class="mark" href="https://www.zyx.tw" aria-label="zyx.tw"><svg viewBox="0 0 4096 3615" aria-hidden="true" focusable="false"><path d="${MARK}"/></svg></a></div>
+<nav class="corner tr" aria-label="Main"><a class="link" href="${REPO}"${target(REPO)}>GitHub</a></nav></header>
 <main>
 <h1>${PAGE.title}</h1>
 <p class="sub">${inline(PAGE.tagline)}</p>

@@ -366,7 +366,7 @@ describe.skipIf(!DATABASE_URL)(
           startTs: new Date(now - 5 * 60_000),
           endTs: new Date(now - 5 * 60_000 + 10),
           attributes: {
-            "client.address": "140.113.194.1",
+            "client.address": "203.0.113.1",
             "geo.country": "TW",
             "geo.city": "Taipei",
             "geo.region": "Taipei City",
@@ -392,7 +392,7 @@ describe.skipIf(!DATABASE_URL)(
           startTs: new Date(now - 4 * 60_000),
           endTs: new Date(now - 4 * 60_000 + 10),
           attributes: {
-            "client.address": "140.113.194.1",
+            "client.address": "203.0.113.1",
             "geo.country": "TW",
             "geo.city": "Taipei",
             "geo.region": "Taipei City",
@@ -445,7 +445,7 @@ describe.skipIf(!DATABASE_URL)(
       const result = await topSources(pool, { project, windowMinutes: 60 });
       expect(result.sources).toHaveLength(2);
 
-      const ip1 = result.sources.find((s) => s.ip === "140.113.194.1")!;
+      const ip1 = result.sources.find((s) => s.ip === "203.0.113.1")!;
       expect(ip1.requestCount).toBe(2); // the 2 layout spans that carried the ip (unchanged rule)
       expect(ip1.errorCount).toBe(1); // trace-b's 500, joined in via trace_id
       expect(ip1.topRoutes).toEqual([
@@ -468,13 +468,13 @@ describe.skipIf(!DATABASE_URL)(
       expect(traceA.name).toBe("GET /profile/[id]/page");
       expect(traceA.route).toBe("/profile/[id]/page");
       expect(traceA.httpStatusCode).toBe(200);
-      expect(traceA.clientAddress).toBe("140.113.194.1"); // backfilled from span-a-layout
+      expect(traceA.clientAddress).toBe("203.0.113.1"); // backfilled from span-a-layout
       expect(traceA.country).toBe("TW");
 
       const traceB = result.traces.find((t) => t.traceId === "trace-b")!;
       expect(traceB.route).toBe("/api/orders");
       expect(traceB.httpStatusCode).toBe(500);
-      expect(traceB.clientAddress).toBe("140.113.194.1");
+      expect(traceB.clientAddress).toBe("203.0.113.1");
 
       const traceC = result.traces.find((t) => t.traceId === "trace-c")!;
       expect(traceC.clientAddress).toBe("5.6.7.8");
@@ -528,7 +528,7 @@ describe.skipIf(!DATABASE_URL)(
           startTs: new Date(now - 5 * 60_000),
           endTs: new Date(now - 5 * 60_000 + 10),
           attributes: {
-            "client.address": "140.113.194.1",
+            "client.address": "203.0.113.1",
             "geo.country": "TW",
             "geo.city": "Taipei",
             "geo.region": "Taipei City",
@@ -554,7 +554,7 @@ describe.skipIf(!DATABASE_URL)(
           startTs: new Date(now - 4 * 60_000),
           endTs: new Date(now - 4 * 60_000 + 10),
           attributes: {
-            "client.address": "140.113.194.1",
+            "client.address": "203.0.113.1",
             "geo.country": "TW",
           },
         }),
@@ -581,7 +581,7 @@ describe.skipIf(!DATABASE_URL)(
           startTs: new Date(now - 3 * 60_000),
           endTs: new Date(now - 3 * 60_000 + 10),
           attributes: {
-            "client.address": "140.113.194.1",
+            "client.address": "203.0.113.1",
             "geo.country": "TW",
           },
         }),
@@ -607,7 +607,7 @@ describe.skipIf(!DATABASE_URL)(
 
     test("topSources parses the route out of the span name when http.route is null", async () => {
       const result = await topSources(pool, { project, windowMinutes: 60 });
-      const ip = result.sources.find((s) => s.ip === "140.113.194.1")!;
+      const ip = result.sources.find((s) => s.ip === "203.0.113.1")!;
       expect(ip.topRoutes).toEqual([
         { route: "/api/orders/[id]", count: 1 }, // http.route wins over the "POST /api/orders" name
         { route: "/profile/[id]/page", count: 1 }, // parsed from "GET /profile/[id]/page"

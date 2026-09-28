@@ -1,0 +1,10 @@
+# Keep the build context to what the image runs.
+**/node_modules
+**/.turbo
+**/dist
+**/coverage
+.git
+.github
+.env
+.env.*
+!.env.example

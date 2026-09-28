@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck, lint, test
+    runs-on: ubuntu-latest
+    services:
+      # packages/db runs its integration tests when DATABASE_URL is set.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sensorium
+          POSTGRES_PASSWORD: sensorium
+          POSTGRES_DB: sensorium
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sensorium -d sensorium"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://sensorium:sensorium@localhost:5432/sensorium
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+
+  compose:
+    name: Image and compose smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the image
+        run: docker build -t ghcr.io/zyx1121/sensorium:ci .
+      - name: Start the stack from .env.example
+        run: |
+          sed -e 's/^SENSORIUM_VERSION=.*/SENSORIUM_VERSION=ci/' \
+              -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-postgres/' \
+              -e 's/^SENSORIUM_MCP_TOKEN=.*/SENSORIUM_MCP_TOKEN=ci-mcp-token/' \
+              .env.example > .env
+          docker compose up -d
+      - name: Smoke test
+        run: MCP_TOKEN=ci-mcp-token sh scripts/smoke.sh
+      - name: Logs
+        if: failure()
+        run: docker compose logs

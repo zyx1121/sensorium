@@ -1,0 +1,34 @@
+#!/bin/sh
+# sensorium <role>: the image's one entry point.
+#   ingest                    the OTLP/HTTP receiver on $PORT (8787)
+#   mcp                       the MCP endpoint on $MCP_PORT (8788)
+#   migrate                   apply packages/db/migrations; safe to run again
+#   register-project <name>   print a new ingest token for <name>; running it
+#                             again for the same name rotates the token
+#   retention                 one sweep: partitions ahead, expired rows out
+#   retention-daily           a sweep now and every 24 hours, 5 minutes after
+#                             a failure
+set -eu
+cd /app
+case "${1:-}" in
+ingest) exec bun run apps/ingest/src/index.ts ;;
+mcp) exec bun run apps/mcp/src/index.ts ;;
+migrate | register-project | retention) exec bun run packages/db/src/cli.ts "$@" ;;
+retention-daily)
+	trap 'exit 0' INT TERM
+	while :; do
+		if bun run packages/db/src/cli.ts retention; then
+			delay=86400
+		else
+			echo "sensorium: retention failed, trying again in 5 minutes" >&2
+			delay=300
+		fi
+		sleep "$delay" &
+		wait $!
+	done
+	;;
+*)
+	echo "usage: sensorium ingest | mcp | migrate | register-project <name> | retention | retention-daily" >&2
+	exit 2
+	;;
+esac
