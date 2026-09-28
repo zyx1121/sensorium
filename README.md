@@ -35,6 +35,7 @@ shared bearer token (one trusted consumer); reads are cross-project.
 
 ```
 apps/ingest/     OTLP/HTTP receiver — POST /v1/{logs,traces,metrics}, OTLP/JSON or OTLP/protobuf.
+                 With SENSORIUM_LANDING=1 it also serves the zyx.tw landing page at /.
 apps/mcp/        MCP server (streamable HTTP) — list_projects, query_logs, query_traces, list_traces, error_summary, top_sources, query_metrics, search.
 packages/core/   Signal model + OTLP/JSON → row mapping (pure, unit tested) + span-tree builder.
 packages/db/     SQL migrations, migration runner, query helpers shared by ingest/mcp.

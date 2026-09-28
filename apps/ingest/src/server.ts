@@ -8,6 +8,7 @@ import {
 } from "@sensorium/core";
 import { insertLogs, insertMetricPoints, insertSpans, touchProjectLastSeen, type Pool } from "@sensorium/db";
 import { authenticateIngest } from "./auth.js";
+import { serveLanding } from "./landing.js";
 import { decodeLogsRequestProtobuf, decodeMetricsRequestProtobuf, decodeTraceRequestProtobuf } from "./otlp-protobuf.js";
 
 const JSON_CONTENT_TYPE = "application/json";
@@ -20,8 +21,11 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** Builds the OTLP/HTTP receiver as a Web Standard fetch handler (works with Bun.serve directly). */
-export function createIngestApp(pool: Pool) {
+/**
+ * Builds the OTLP/HTTP receiver as a Web Standard fetch handler (works with Bun.serve directly).
+ * `landing` also serves the zyx.tw landing page at / (see ./landing.ts).
+ */
+export function createIngestApp(pool: Pool, { landing = false }: { landing?: boolean } = {}) {
   async function withAuth(
     req: Request,
     handle: (project: string, contentType: string) => Promise<Response>,
@@ -59,6 +63,11 @@ export function createIngestApp(pool: Pool) {
 
   async function fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
+
+    if (landing) {
+      const page = serveLanding(req, url);
+      if (page) return page;
+    }
 
     if (req.method === "GET" && url.pathname === "/health") {
       return json({ status: "ok" });
