@@ -1,7 +1,7 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
-  "globalEnv": ["DATABASE_URL", "PORT", "MCP_PORT", "SENSORIUM_MCP_TOKEN"],
+  "globalEnv": ["DATABASE_URL", "PORT", "MCP_PORT", "SENSORIUM_MCP_TOKEN", "SENSORIUM_LANDING"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
