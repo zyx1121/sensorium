@@ -36,7 +36,7 @@ h1{font-size:30px;line-height:36px;font-weight:400}
 main p{margin-top:12px;font-size:16px;line-height:24px;color:var(--muted-foreground)}
 .corner{position:fixed;z-index:50;display:flex;align-items:center;gap:16px;font-size:14px;line-height:20px}
 .tl{top:20px;left:20px}.bl{bottom:20px;left:20px}.br{right:20px;bottom:20px}
-a{color:inherit;text-decoration:none;border-radius:4px;outline-offset:4px}
+a{color:inherit;text-decoration:none;border-radius:6px;outline-offset:4px}
 a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent)}
 .link{position:relative;color:var(--muted-foreground);transition:color 150ms cubic-bezier(0.4,0,0.2,1)}
 .link::after{content:"";position:absolute;inset:-2px -8px}
@@ -84,8 +84,10 @@ Part of [zyx.tw](https://www.zyx.tw): [Privacy](https://www.zyx.tw/privacy), [Te
 // Hashes stand in for 'unsafe-inline': the one <style> block is all the page runs.
 const CSP = `default-src 'none'; style-src 'sha256-${new Bun.CryptoHasher("sha256").update(STYLE).digest("base64")}'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 
-function respond(req: Request, body: string | Blob, headers: Record<string, string>): Response {
-  return new Response(req.method === "HEAD" ? null : body, {
+// HEAD gets the body too: Bun.serve drops it on the wire and sends the length a
+// GET would, which a null body would announce as 0 (RFC 9110 9.3.2).
+function respond(body: string | Blob, headers: Record<string, string>): Response {
+  return new Response(body, {
     headers: { "x-content-type-options": "nosniff", ...headers },
   });
 }
@@ -97,7 +99,7 @@ export function serveLanding(req: Request, url: URL): Response | null {
   const wantsMarkdown = (req.headers.get("accept") ?? "").includes("text/markdown");
 
   if (url.pathname === "/index.md" || (url.pathname === "/" && wantsMarkdown)) {
-    return respond(req, MARKDOWN, {
+    return respond(MARKDOWN, {
       "content-type": "text/markdown; charset=utf-8",
       "cache-control": "public, max-age=300",
       vary: "accept",
@@ -105,7 +107,7 @@ export function serveLanding(req: Request, url: URL): Response | null {
   }
 
   if (url.pathname === "/") {
-    return respond(req, html(new Date().getUTCFullYear()), {
+    return respond(html(new Date().getUTCFullYear()), {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "public, max-age=300",
       "content-security-policy": CSP,
@@ -116,7 +118,7 @@ export function serveLanding(req: Request, url: URL): Response | null {
 
   const asset = FILES[url.pathname];
   if (asset) {
-    return respond(req, Bun.file(path.join(STATIC, asset.file)), {
+    return respond(Bun.file(path.join(STATIC, asset.file)), {
       "content-type": asset.type,
       "cache-control": "public, max-age=604800",
     });

@@ -56,11 +56,24 @@ describe("landing page", () => {
     }
   });
 
-  test("HEAD gets the headers without a body", async () => {
-    const res = await get(on, "/", { method: "HEAD" });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(await res.text()).toBe("");
+  // Over a real socket: Bun.serve, not the handler, strips a HEAD body, and it
+  // must still announce the length a GET gets.
+  test("HEAD gets a GET's headers and length without the body", async () => {
+    const server = Bun.serve({ port: 0, fetch: on.fetch });
+    try {
+      for (const path of ["/", "/index.md", "/favicon.ico", "/fonts/InterVariable.woff2"]) {
+        const full = await fetch(new URL(path, server.url));
+        const length = (await full.arrayBuffer()).byteLength;
+        const head = await fetch(new URL(path, server.url), { method: "HEAD" });
+        expect(head.status).toBe(200);
+        expect(head.headers.get("content-type")).toBe(full.headers.get("content-type"));
+        expect(Number(head.headers.get("content-length"))).toBe(length);
+        expect(length).toBeGreaterThan(0);
+        expect(await head.text()).toBe("");
+      }
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("serves the font and the favicon", async () => {
