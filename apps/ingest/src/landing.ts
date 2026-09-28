@@ -140,7 +140,9 @@ const inline = (text: string) =>
  * The corner tips every zyx.tw site shows (CornerTip in www.zyx.tw's
  * packages/ui), saying what an item's label leaves out. A tip opens at once on
  * hover and on keyboard focus of a link, toward the page and lined up with the
- * item's outer edge, and stays open while the pointer is on it (STYLE). Like
+ * item's outer edge, and stays open while the pointer is on it (STYLE): a
+ * bridge as wide as the item spans the 4 px gap, beneath the link's own hit
+ * area where they overlap, so it never takes a click meant for a link. Like
  * www.zyx.tw's, it is visual only.
  */
 const TIPS = {
@@ -224,15 +226,15 @@ a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent
 .tl .tipped,.tr .tipped{--tip-from:-8px}.bl .tipped,.br .tipped{--tip-from:8px}
 .tip,.tipped::after{position:absolute;z-index:50;pointer-events:none;background:var(--foreground);opacity:0;visibility:hidden}
 .tip{width:max-content;max-width:320px;padding:6px 12px;border-radius:8px;color:var(--background);font-size:12px;line-height:16px;font-weight:400;font-variant-numeric:normal;transform:scale(.95)}
-.tip::before{content:"";position:absolute;left:0;right:0;height:4px}
+.tipped::before{content:"";position:absolute;left:0;right:0;height:4px;pointer-events:none}
 .tipped::after{content:"";left:calc(50% - 5px);width:10px;height:10px;border-radius:2px;transform:rotate(45deg)}
-.tl .tip,.tr .tip{top:calc(100% + 4px)}.tl .tip::before,.tr .tip::before{bottom:100%}.tl .tipped::after,.tr .tipped::after{top:calc(100% + 1px)}
-.bl .tip,.br .tip{bottom:calc(100% + 4px)}.bl .tip::before,.br .tip::before{top:100%}.bl .tipped::after,.br .tipped::after{bottom:calc(100% + 1px)}
+.tl .tip,.tr .tip{top:calc(100% + 4px)}.tl .tipped::before,.tr .tipped::before{top:100%}.tl .tipped::after,.tr .tipped::after{top:calc(100% + 1px)}
+.bl .tip,.br .tip{bottom:calc(100% + 4px)}.bl .tipped::before,.br .tipped::before{bottom:100%}.bl .tipped::after,.br .tipped::after{bottom:calc(100% + 1px)}
 .tl .tip{left:0;transform-origin:top left}.tr .tip{right:0;transform-origin:top right}.bl .tip{left:0;transform-origin:bottom left}.br .tip{right:0;transform-origin:bottom right}
-@media (hover:hover){.tipped:hover>.tip,.tipped:hover::after{opacity:1;visibility:visible;transition:visibility 0s}.tipped:hover>.tip{transform:none;pointer-events:auto}}
+@media (hover:hover){.tipped:hover>.tip,.tipped:hover::after{opacity:1;visibility:visible;transition:visibility 0s}.tipped:hover>.tip{transform:none;pointer-events:auto}.tipped:hover::before{pointer-events:auto}}
 .tipped:has(>a:focus-visible)>.tip,.tipped:has(>a:focus-visible)::after{opacity:1;visibility:visible;transition:visibility 0s}.tipped:has(>a:focus-visible)>.tip{transform:none}
-.tipped.off>.tip,.tipped.off::after{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
-@media (prefers-reduced-motion:no-preference){.tip,.tipped::after{transition:opacity 150ms ease,transform 150ms ease,visibility 0s linear 150ms}.tipped.off>.tip,.tipped.off::after{transition:opacity 150ms ease,visibility 0s linear 150ms!important}.tipped:hover>.tip,.tipped:has(>a:focus-visible)>.tip{animation:tip-in 150ms ease}.tipped:hover::after,.tipped:has(>a:focus-visible)::after{animation:tip-arrow-in 150ms ease}}
+.tipped.off>.tip,.tipped.off::after{opacity:0!important;visibility:hidden!important;pointer-events:none!important}.tipped.off>.tip{transform:scale(.95)!important}
+@media (prefers-reduced-motion:no-preference){.tip,.tipped::after{transition:opacity 150ms ease,transform 150ms ease,visibility 0s linear 150ms}.tipped.off>.tip,.tipped.off::after{transition:opacity 150ms ease,transform 150ms ease,visibility 0s linear 150ms!important}.tipped:hover>.tip,.tipped:has(>a:focus-visible)>.tip{animation:tip-in 150ms ease}.tipped:hover::after,.tipped:has(>a:focus-visible)::after{animation:tip-arrow-in 150ms ease}}
 @keyframes tip-in{from{opacity:0;transform:translateY(var(--tip-from)) scale(.95)}}
 @keyframes tip-arrow-in{from{opacity:0;transform:translateY(var(--tip-from)) rotate(45deg)}}
 .fade{pointer-events:none;position:fixed;left:0;right:0;z-index:40;height:64px}
@@ -279,7 +281,8 @@ ${PAGE.sections.map(({ heading, blocks }) => `## ${heading}\n\n${blocks.map(mark
 Part of [zyx.tw](https://www.zyx.tw): [Privacy](https://www.zyx.tw/privacy), [Terms](https://www.zyx.tw/terms).
 `;
 
-// Hashes stand in for 'unsafe-inline': the one <style> block is all the page runs.
+// Hashes stand in for 'unsafe-inline': the one <style> block and the one <script>
+// (SCRIPT) are all the page runs.
 const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("base64");
 
 const CSP = `default-src 'none'; style-src 'sha256-${sha256(STYLE)}'; script-src 'sha256-${sha256(SCRIPT)}'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
