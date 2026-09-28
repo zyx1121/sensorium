@@ -5,8 +5,8 @@ import path from "node:path";
  * and how to use it, in the frame every zyx.tw site shares (the zyx mark top
  * left, mirrored on hover; Privacy and Terms bottom left; the copyright bottom
  * right; all 14 px on 20 px lines, 20 px in from the corners). The column, type
- * sizes and dark tokens are www.zyx.tw's, and the font is the same Inter subset
- * (static/README.md). An agent that asks for text/markdown, or opens
+ * sizes (20 px body text on a phone, 16 px from 640 px up) and dark tokens are
+ * www.zyx.tw's, and the font is the same Inter subset (static/README.md). An agent that asks for text/markdown, or opens
  * /index.md, gets the same page as Markdown: both are rendered from PAGE.
  *
  * Only an instance started with SENSORIUM_LANDING=1 serves it; the others
@@ -67,7 +67,7 @@ const PAGE: { title: string; tagline: string; sections: { heading: string; block
           steps: [
             { text: "Ask Loki for a project and its ingest token. This instance serves Loki's own services." },
             {
-              text: "Point the service's OpenTelemetry exporter here. sensorium takes neither gzip nor gRPC, so put an OpenTelemetry Collector in front of an exporter that only speaks those.",
+              text: "Point the service's OpenTelemetry exporter here. sensorium takes neither gzip nor gRPC. For an exporter that only speaks those, put an OpenTelemetry Collector in front and set `compression: none` on its otlphttp exporter.",
               code: "OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.zyx.tw\nOTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\nOTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20<ingest token>",
             },
             {
@@ -116,7 +116,8 @@ const STYLE = `
 :root{color-scheme:dark;--background:oklch(0 0 0);--foreground:oklch(0.985 0 0);--muted:oklch(0.269 0 0);--muted-foreground:oklch(0.65 0 0);--border:oklch(1 0 0 / 10%);--ring:oklch(0.556 0 0)}
 *{box-sizing:border-box;margin:0;padding:0}
 html{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-feature-settings:"liga" 1,"calt" 1,"ss01" 1,"zero" 1;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;scrollbar-gutter:stable}
-body{background:var(--background);color:var(--foreground);font-size:16px;line-height:24px}
+body{background:var(--background);color:var(--foreground);font-size:20px;line-height:28px}
+@media (min-width:640px){body{font-size:16px;line-height:24px}}
 main{margin:0 auto;width:100%;max-width:36rem;padding:120px 20px 100px}
 @media (min-width:1024px){main{max-width:48rem}}
 @media (min-width:1536px){main{max-width:64rem}}
@@ -133,9 +134,9 @@ section p{margin-top:12px;text-wrap:pretty}
 .steps li::before{content:counter(step);color:var(--muted-foreground);font-variant-numeric:tabular-nums}
 .steps li>*{grid-column:2}
 .steps p{margin-top:0}
-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.875em}
 :not(pre)>code{background:var(--muted);padding:1px 4px;border-radius:4px;overflow-wrap:anywhere}
-pre{margin-top:12px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;overflow-x:auto;line-height:20px}
+pre{margin-top:12px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;overflow-x:auto;line-height:1.45}
 .corner{position:fixed;z-index:50;display:flex;align-items:center;gap:16px;font-size:14px;line-height:20px}
 .tl{top:20px;left:20px}.bl{bottom:20px;left:20px}.br{right:20px;bottom:20px}
 a{color:inherit;text-decoration:none;border-radius:6px;outline-offset:4px}

@@ -52,6 +52,8 @@ describe("landing page", () => {
     expect(page).toContain("Bearer%20&lt;ingest token&gt;");
     expect(page).not.toContain("<ingest token>");
     expect(md).toContain("   ```sh\n   OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.zyx.tw\n");
+    // A Collector re-exports with gzip unless told not to, and ingest refuses gzip.
+    expect(page).toContain("<code>compression: none</code>");
   });
 
   test("the CSP hash matches the page's one <style> block", async () => {
