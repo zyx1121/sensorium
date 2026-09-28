@@ -36,6 +36,26 @@ describe("landing page", () => {
     expect(body).toContain(`© ${new Date().getUTCFullYear()}`);
   });
 
+  test("says what it is, what it does and how to use it, in HTML and Markdown", async () => {
+    const page = await (await get(on, "/")).text();
+    const md = await (await get(on, "/index.md")).text();
+    for (const heading of ["What it is", "What it does", "How to use it"]) {
+      expect(page).toContain(`<h2>${heading}</h2>`);
+      expect(md).toContain(`## ${heading}\n`);
+    }
+    const tools = ["list_projects", "query_logs", "query_traces", "list_traces", "error_summary", "top_sources", "query_metrics", "search"];
+    for (const tool of tools) {
+      expect(page).toContain(`<code>${tool}</code>`);
+      expect(md).toContain(`\`${tool}\``);
+    }
+    // Placeholders in the code blocks are escaped, not parsed as tags.
+    expect(page).toContain("Bearer%20&lt;ingest token&gt;");
+    expect(page).not.toContain("<ingest token>");
+    expect(md).toContain("   ```sh\n   OTEL_EXPORTER_OTLP_ENDPOINT=https://sensorium.zyx.tw\n");
+    // A Collector re-exports with gzip unless told not to, and ingest refuses gzip.
+    expect(page).toContain("<code>compression: none</code>");
+  });
+
   test("the CSP hash matches the page's one <style> block", async () => {
     const res = await get(on, "/");
     const style = (await res.text()).match(/<style>([\s\S]*?)<\/style>/)![1]!;

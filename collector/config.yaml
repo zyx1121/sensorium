@@ -23,6 +23,8 @@ exporters:
   otlphttp:
     endpoint: http://localhost:8787
     encoding: json
+    # otlphttp gzips by default, and apps/ingest does not decode gzip (400).
+    compression: none
     headers:
       # One token per project — see .env.example / `bun run db:register-project`.
       authorization: "Bearer ${env:SENSORIUM_INGEST_TOKEN}"
