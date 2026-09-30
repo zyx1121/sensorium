@@ -43,7 +43,7 @@ describe("landing page", () => {
       "zyx1121/sensorium",
       "What every zyx.tw site stores and logs",
       "The rules for every zyx.tw site",
-      "Loki (詹詠翔)",
+      "Loki",
     ]) {
       expect(body).toContain(`<span class="tip" aria-hidden="true">${tip}</span>`);
     }
