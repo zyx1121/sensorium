@@ -150,7 +150,7 @@ const TIPS = {
   github: "zyx1121/sensorium",
   privacy: "What every zyx.tw site stores and logs",
   terms: "The rules for every zyx.tw site",
-  copyright: "Loki (詹詠翔)",
+  copyright: "Loki",
 };
 
 const tip = (text: string) => `<span class="tip" aria-hidden="true">${escape(text)}</span>`;
