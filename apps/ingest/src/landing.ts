@@ -237,9 +237,9 @@ a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent
 @media (prefers-reduced-motion:no-preference){.tip,.tipped::after{transition:opacity 150ms ease,transform 150ms ease,visibility 0s linear 150ms}.tipped.off>.tip,.tipped.off::after{transition:opacity 150ms ease,transform 150ms ease,visibility 0s linear 150ms!important}.tipped:hover>.tip,.tipped:has(>a:focus-visible)>.tip{animation:tip-in 150ms ease}.tipped:hover::after,.tipped:has(>a:focus-visible)::after{animation:tip-arrow-in 150ms ease}}
 @keyframes tip-in{from{opacity:0;transform:translateY(var(--tip-from)) scale(.95)}}
 @keyframes tip-arrow-in{from{opacity:0;transform:translateY(var(--tip-from)) rotate(45deg)}}
-.fade{pointer-events:none;position:fixed;left:0;right:0;z-index:40;height:64px}
-.fade.top{top:0;background:linear-gradient(to bottom,var(--background) 60%,transparent)}
-.fade.bottom{bottom:0;background:linear-gradient(to top,var(--background) 60%,transparent)}
+.fade{pointer-events:none;position:fixed;left:0;right:0;z-index:40;height:64px;background:transparent;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);-webkit-mask-image:linear-gradient(var(--edge-direction),#000 35%,transparent);mask-image:linear-gradient(var(--edge-direction),#000 35%,transparent)}
+.fade.top{top:0;--edge-direction:to bottom}
+.fade.bottom{bottom:0;--edge-direction:to top}
 `;
 
 function html(year: number): string {
