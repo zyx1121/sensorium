@@ -211,7 +211,6 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 :not(pre)>code{background:var(--muted);padding:1px 4px;border-radius:4px;overflow-wrap:anywhere}
 pre{margin-top:12px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;overflow-x:auto;line-height:1.45}
 .corner{position:fixed;z-index:50;display:flex;align-items:center;gap:16px;font-size:14px;line-height:20px}
-footer .corner{font-size:12px;line-height:16px}
 .tl{top:20px;left:20px}.tr{top:20px;right:20px}.bl{bottom:20px;left:20px}.br{right:20px;bottom:20px}
 a{color:inherit;text-decoration:none;border-radius:6px;outline-offset:4px}
 a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent)}
