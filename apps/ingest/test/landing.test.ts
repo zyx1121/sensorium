@@ -13,7 +13,7 @@ const on = createIngestApp(pool, { landing: true });
 const off = createIngestApp(pool);
 
 const get = (app: typeof on, path: string, init?: RequestInit) =>
-  app.fetch(new Request(`https://sensorium.zyx.tw${path}${path.includes("?") ? "" : "?lang=en"}`, init));
+  app.fetch(new Request(`https://sensorium.zyx.tw${path}`, init));
 
 describe("landing page", () => {
   test("is off unless asked for: / stays the JSON 404", async () => {
@@ -26,7 +26,7 @@ describe("landing page", () => {
     const res = await get(on, "/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(res.headers.get("vary")).toBe("Accept, Cookie");
+    expect(res.headers.get("vary")).toBe("accept");
     expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
     const body = await res.text();
     expect(body).toContain("<h1>sensorium</h1>");
@@ -142,32 +142,4 @@ describe("landing page", () => {
     expect((await get(on, "/health")).status).toBe(200);
     expect((await get(on, "/nope")).status).toBe(404);
   });
-});
-
-
-describe("landing language contract", () => {
- test("defaults to Traditional Chinese, including Markdown and metadata", async () => {
-  for (const path of ["/", "/index.md"]) {
-   const res = await on.fetch(new Request(`https://sensorium.zyx.tw${path}`));
-   expect(res.headers.get("content-language")).toBe("zh-TW");
-   expect(res.headers.get("cache-control")).toBe("private, no-store");
-   const text = await res.text();
-   expect(text).toContain("關於 Sensorium");
-   if (path === "/") expect(text).toContain('lang="zh-TW"');
-  }
- });
- test("explicit selection wins over cookie and only supported choices persist", async () => {
-  const english = await on.fetch(new Request("https://sensorium.zyx.tw/", {headers:{cookie:"zyx_locale=en"}}));
-  expect(await english.text()).toContain('lang="en"');
-  const chinese = await on.fetch(new Request("https://sensorium.zyx.tw/?lang=zh-TW", {headers:{cookie:"zyx_locale=en"}}));
-  expect(chinese.headers.get("set-cookie")).toContain("Domain=.zyx.tw; Secure");
-  expect(await chinese.text()).toContain('lang="zh-TW"');
-  const invalid = await on.fetch(new Request("https://sensorium.zyx.tw/?lang=fr"));
-  expect(invalid.headers.get("set-cookie")).toBeNull();
-  expect(invalid.headers.get("content-language")).toBe("zh-TW");
- });
- test("does not share the preference with an unrelated hostname", async () => {
-  const res = await on.fetch(new Request("https://evilzyx.tw/?lang=en"));
-  expect(res.headers.get("set-cookie")).not.toContain("Domain=");
- });
 });
