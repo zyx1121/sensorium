@@ -1,4 +1,3 @@
-import zh from "./landing.zh-TW.json" with { type: "json" };
 import path from "node:path";
 
 /**
@@ -117,18 +116,6 @@ const PAGE: { title: string; tagline: string; sections: { heading: string; block
   ],
 };
 
-type Locale = "zh-TW" | "en";
-const supported = (value: string | null | undefined): value is Locale => value === "zh-TW" || value === "en";
-const translate = (locale: Locale) => (text: string) => locale === "zh-TW" ? (zh as Record<string, string>)[text] ?? text : text;
-function localizedPage(locale: Locale) {
-  const t = translate(locale);
-  return { ...PAGE, tagline: t(PAGE.tagline), sections: PAGE.sections.map(section => ({
-    heading: t(section.heading), blocks: section.blocks.map((b): Block =>
-      "p" in b ? {p:t(b.p)} : "rows" in b ? {rows:b.rows.map(([label,text]) => [t(label),t(text)])} :
-      {steps:b.steps.map(step => ({...step,text:t(step.text)}))})
-  })) };
-}
-
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -173,7 +160,7 @@ const tip = (text: string) => `<span class="tip" aria-hidden="true">${escape(tex
  * closes the open one until the pointer enters it again or focus leaves it,
  * and a touch never opens one. The CSP allows it by its hash.
  */
-const SCRIPT = `const languageLink=document.querySelector("[data-language]");if(languageLink){const u=new URL(location.href);u.searchParams.set("lang",languageLink.dataset.language);languageLink.href=u.href;}for(const t of document.querySelectorAll(".tipped")){t.addEventListener("pointerenter",e=>t.classList.toggle("off",e.pointerType==="touch"));t.addEventListener("pointerdown",()=>t.classList.add("off"));t.addEventListener("focusout",()=>t.classList.remove("off"))}addEventListener("keydown",e=>{if(e.key==="Escape")for(const t of document.querySelectorAll(".tipped:hover,.tipped:focus-within"))t.classList.add("off")})`;
+const SCRIPT = `for(const t of document.querySelectorAll(".tipped")){t.addEventListener("pointerenter",e=>t.classList.toggle("off",e.pointerType==="touch"));t.addEventListener("pointerdown",()=>t.classList.add("off"));t.addEventListener("focusout",()=>t.classList.remove("off"))}addEventListener("keydown",e=>{if(e.key==="Escape")for(const t of document.querySelectorAll(".tipped:hover,.tipped:focus-within"))t.classList.add("off")})`;
 
 function block(b: Block): string {
   if ("p" in b) return `<p>${inline(b.p)}</p>`;
@@ -254,33 +241,28 @@ a:focus-visible{outline:2px solid color-mix(in oklab,var(--ring) 50%,transparent
 .fade.bottom{bottom:0;--edge-direction:to top}
 `;
 
-function html(year: number, locale: Locale): string {
-  const PAGE = localizedPage(locale);
-  const t = translate(locale);
-  const next = locale === "en" ? "zh-TW" : "en";
+function html(year: number): string {
   return `<!doctype html>
-<html lang="${locale}">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${PAGE.title}</title>
 <meta name="description" content="${escape(PAGE.tagline)}">
 <link rel="icon" href="/favicon.ico">
-<link rel="alternate" type="text/markdown" href="/index.md?lang=${locale}">
-<link rel="alternate" hreflang="zh-Hant" href="/?lang=zh-TW">
-<link rel="alternate" hreflang="en" href="/?lang=en">
+<link rel="alternate" type="text/markdown" href="/index.md">
 <style>${STYLE}</style>
 </head>
 <body>
 <header><div class="fade top"></div><div class="corner tl"><span class="tipped"><a class="mark" href="https://www.zyx.tw" aria-label="zyx.tw"><svg viewBox="0 0 4096 3615" aria-hidden="true" focusable="false"><path d="${MARK}"/></svg></a>${tip(TIPS.mark)}</span></div>
-<nav class="corner tr" aria-label="${t("Main")}"><span class="tipped"><a class="link" href="${REPO}"${target(REPO)}>GitHub</a>${tip(TIPS.github)}</span><a class="link" data-language="${next}" href="?lang=${next}" lang="${next}" aria-label="${locale === "en" ? "Switch to Traditional Chinese" : "切換為英文"}">${next === "en" ? "EN" : "繁中"}</a></nav></header>
+<nav class="corner tr" aria-label="Main"><span class="tipped"><a class="link" href="${REPO}"${target(REPO)}>GitHub</a>${tip(TIPS.github)}</span></nav></header>
 <main>
 <h1>${PAGE.title}</h1>
 <p class="sub">${inline(PAGE.tagline)}</p>
 ${PAGE.sections.map(({ heading, blocks }) => `<section><h2>${escape(heading)}</h2>${blocks.map(block).join("")}</section>`).join("\n")}
 </main>
 <footer><div class="fade bottom"></div>
-<nav class="corner bl" aria-label="${t("Legal")}"><span class="tipped"><a class="link" href="https://www.zyx.tw/privacy">${t("Privacy")}</a>${tip(t(TIPS.privacy))}</span><span class="tipped"><a class="link" href="https://www.zyx.tw/terms">${t("Terms")}</a>${tip(t(TIPS.terms))}</span></nav>
+<nav class="corner bl" aria-label="Legal"><span class="tipped"><a class="link" href="https://www.zyx.tw/privacy">Privacy</a>${tip(TIPS.privacy)}</span><span class="tipped"><a class="link" href="https://www.zyx.tw/terms">Terms</a>${tip(TIPS.terms)}</span></nav>
 <div class="corner br"><p class="tipped">© ${year}${tip(TIPS.copyright)}</p></div>
 </footer>
 <script>${SCRIPT}</script>
@@ -289,17 +271,14 @@ ${PAGE.sections.map(({ heading, blocks }) => `<section><h2>${escape(heading)}</h
 `;
 }
 
-function markdown(locale: Locale) {
- const PAGE = localizedPage(locale);
- return `# ${PAGE.title}
+const MARKDOWN = `# ${PAGE.title}
 
 ${PAGE.tagline}
 
 ${PAGE.sections.map(({ heading, blocks }) => `## ${heading}\n\n${blocks.map(markdownBlock).join("\n\n")}`).join("\n\n")}
 
-${locale === "en" ? "Part of [zyx.tw](https://www.zyx.tw): [Privacy](https://www.zyx.tw/privacy), [Terms](https://www.zyx.tw/terms)." : "[zyx.tw](https://www.zyx.tw) 的一部分：[隱私權](https://www.zyx.tw/privacy)、[條款](https://www.zyx.tw/terms)。"}
+Part of [zyx.tw](https://www.zyx.tw): [Privacy](https://www.zyx.tw/privacy), [Terms](https://www.zyx.tw/terms).
 `;
-}
 
 // Hashes stand in for 'unsafe-inline': the one <style> block and the one <script>
 // (SCRIPT) are all the page runs.
@@ -319,29 +298,23 @@ function respond(body: string | Blob, headers: Record<string, string>): Response
 export function serveLanding(req: Request, url: URL): Response | null {
   if (req.method !== "GET" && req.method !== "HEAD") return null;
 
-  const explicit = url.searchParams.get("lang");
-  const saved = req.headers.get("cookie")?.split(";").map(part => part.trim()).find(part => part.startsWith("zyx_locale="))?.slice("zyx_locale=".length);
-  const locale: Locale = supported(explicit) ? explicit : supported(saved) ? saved : "zh-TW";
-  const shared = url.hostname === "zyx.tw" || url.hostname.endsWith(".zyx.tw");
-  const localeHeaders: Record<string,string> = {
-    "content-language": locale, "cache-control": "private, no-store", vary: "Accept, Cookie",
-    ...(supported(explicit) ? {"set-cookie": `zyx_locale=${locale}; Path=/; Max-Age=31536000; SameSite=Lax${shared ? "; Domain=.zyx.tw" : ""}${url.protocol === "https:" ? "; Secure" : ""}`} : {})
-  };
   const wantsMarkdown = (req.headers.get("accept") ?? "").includes("text/markdown");
 
   if (url.pathname === "/index.md" || (url.pathname === "/" && wantsMarkdown)) {
-    return respond(markdown(locale), {
+    return respond(MARKDOWN, {
       "content-type": "text/markdown; charset=utf-8",
-      ...localeHeaders,
+      "cache-control": "public, max-age=300",
+      vary: "accept",
     });
   }
 
   if (url.pathname === "/") {
-    return respond(html(new Date().getUTCFullYear(), locale), {
+    return respond(html(new Date().getUTCFullYear()), {
       "content-type": "text/html; charset=utf-8",
-      ...localeHeaders,
+      "cache-control": "public, max-age=300",
       "content-security-policy": CSP,
-      link: `</index.md?lang=${locale}>; rel="alternate"; type="text/markdown"`,
+      link: '</index.md>; rel="alternate"; type="text/markdown"',
+      vary: "accept",
     });
   }
 

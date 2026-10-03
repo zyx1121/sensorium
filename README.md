@@ -197,7 +197,3 @@ Issues and PRs welcome: start with [CONTRIBUTING.md](https://github.com/zyx1121/
 ## License
 
 [MIT](LICENSE) · named for the part of the brain that receives everything the senses report.
-
-### Landing page languages
-
-The optional public landing page defaults to Traditional Chinese and offers English. `?lang=zh-TW` or `?lang=en` overrides the `zyx_locale` cookie shared by zyx.tw subdomains. HTML, metadata and Markdown use the same localized page data. Responses vary by Cookie and Accept and are private, preventing cached language leakage. API payloads, MCP tools, commands and identifiers retain their existing format.
