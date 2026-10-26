@@ -24,8 +24,12 @@ function json(body: unknown, status = 200): Response {
 /**
  * Builds the OTLP/HTTP receiver as a Web Standard fetch handler (works with Bun.serve directly).
  * `landing` also serves the zyx.tw landing page at / (see ./landing.ts).
+ * `dropMetric` discards matching metric points before insert (see ./metric-drop.ts).
  */
-export function createIngestApp(pool: Pool, { landing = false }: { landing?: boolean } = {}) {
+export function createIngestApp(
+  pool: Pool,
+  { landing = false, dropMetric = () => false }: { landing?: boolean; dropMetric?: (metricName: string) => boolean } = {},
+) {
   async function withAuth(
     req: Request,
     handle: (project: string, contentType: string) => Promise<Response>,
@@ -103,7 +107,7 @@ export function createIngestApp(pool: Pool, { landing = false }: { landing?: boo
           contentType === PROTOBUF_CONTENT_TYPE
             ? decodeMetricsRequestProtobuf(new Uint8Array(await req.arrayBuffer()))
             : ((await req.json()) as OtlpMetricsPayload);
-        const rows = mapOtlpMetricsToRows(project, payload);
+        const rows = mapOtlpMetricsToRows(project, payload).filter((row) => !dropMetric(row.metricName));
         const inserted = await insertMetricPoints(pool, rows);
         return json({ ok: true, inserted });
       });
