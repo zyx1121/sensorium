@@ -28,3 +28,7 @@ sh scripts/smoke.sh
 ## Deploy
 
 The production instances run from the published image with Docker Compose. After a release, pull the new tag, run `docker compose up -d`, then call `list_projects` to verify that the MCP endpoint answers.
+
+## Deploy
+
+A merge to main deploys the zyx instance itself: `release.yml` calls the shared `ship.yml` with `target: land`, and carrel-deployd on VM 117 (`compose`) runs `deploy/carrel-start.sh` against `/opt/sensorium-zyx`. Wait for it with `golem-watch zyx1121/sensorium <sha>`. The image is built once, in the pull request (`image.yml`); `deploy/smoke.sh` is its smoke test.
