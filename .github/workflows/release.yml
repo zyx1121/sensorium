@@ -1,19 +1,35 @@
 name: release
 
-# Every push to main publishes ghcr.io/zyx1121/sensorium:sha-<commit> (immutable)
-# and :main. A v* tag publishes the SemVer tags and :latest.
+# A push to main deploys the image ci passed to VM 117 through land: ship
+# retags tree-<tree> as sha-<commit> and main, then carrel-deployd on the VM
+# runs deploy/carrel-start.sh. A v* tag publishes the SemVer tags and
+# :latest for amd64 and arm64.
 on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
-  image:
+  ship:
+    if: github.ref == 'refs/heads/main'
+    uses: zyx1121/.github/.github/workflows/ship.yml@main
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+      id-token: write
+    with:
+      images: '["ghcr.io/zyx1121/sensorium"]'
+      target: land
+      tenant: compose
+      app: sensorium
+
+  semver:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-qemu-action@v3
@@ -28,8 +44,6 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=sha,prefix=sha-
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
       - uses: docker/build-push-action@v6

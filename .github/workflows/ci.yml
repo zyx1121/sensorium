@@ -36,22 +36,20 @@ jobs:
       - run: bun run lint
       - run: bun run test
 
-  compose:
-    name: Image and compose smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build the image
-        run: docker build -t ghcr.io/zyx1121/sensorium:ci .
-      - name: Start the stack from .env.example
-        run: |
-          sed -e 's/^SENSORIUM_VERSION=.*/SENSORIUM_VERSION=ci/' \
-              -e 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-postgres/' \
-              -e 's/^SENSORIUM_MCP_TOKEN=.*/SENSORIUM_MCP_TOKEN=ci-mcp-token/' \
-              .env.example > .env
-          docker compose up -d
-      - name: Smoke test
-        run: MCP_TOKEN=ci-mcp-token sh scripts/smoke.sh
-      - name: Logs
-        if: failure()
-        run: docker compose logs
+  image:
+    uses: zyx1121/.github/.github/workflows/image.yml@main
+    permissions:
+      contents: read
+      packages: write
+    with:
+      images: '[{"name": "ghcr.io/zyx1121/sensorium"}]'
+      smoke: bash deploy/smoke.sh
+
+  promote:
+    needs: [check, image]
+    uses: zyx1121/.github/.github/workflows/promote.yml@main
+    permissions:
+      contents: read
+      packages: write
+    with:
+      images: '["ghcr.io/zyx1121/sensorium"]'
