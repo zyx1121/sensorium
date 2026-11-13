@@ -27,6 +27,20 @@ services:
       POSTGRES_USER: sensorium
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: sensorium
+    # PostgreSQL's stock 128MB cache is far below a telemetry database's working set
+    # (a 100 GB database ran at a 16% cache hit rate). Size it to about a quarter of
+    # the host's memory with POSTGRES_SHARED_BUFFERS.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1536MB}
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+    shm_size: 256mb
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
